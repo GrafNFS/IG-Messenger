@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">IG Messenger</string>
+
+    <!-- Навигация -->
+    <string name="nav_chats">Чаты</string>
+    <string name="nav_contacts">Контакты</string>
+    <string name="nav_settings">Настройки</string>
+
+    <!-- Поиск -->
+    <string name="search_messages">Поиск чатов</string>
+    <string name="search_contacts">Поиск по имени или username</string>
+
+    <!-- Чат -->
+    <string name="type_message">Сообщение…</string>
+    <string name="online">в сети</string>
+    <string name="offline">не всети</string>
+
+    <!-- Профиль -->
+
+    <!-- Статусы -->
+
+    <!-- Вход и регистрация -->
+    <string name="edt_username">Никнейм</string>
+    <string name="edt_password">Пароль</string>
+    <string name="str_login">Вход</string>
+    <string name="str_login_send">Выполняем вход...</string>
+    <string name="str_login_welkome">Добро Пожаловать</string>
+    <string name="str_login_sigtin">Войдите, чтобы продолжить</string>
+    <string name="txt_signup">Если нет аккаунта? Регистрация</string>
+    <string name="str_registration">Зарегистрироватся</string>
+    <string name="str_registration_send">Регистрация...</string>
+    <string name="edt_password_confirm">Подтверждение пароля</string>
+    <string name="edt_email">Емайл</string>
+    <string name="edt_first_name">Имя</string>
+    <string name="edt_last_name">Фамилия</string>
+    <string name="str_regi_info">Введите свои данные, чтобы начать</string>
+    <string name="txt_create_accaunt">Создание акаунта</string>
+    <string name="txt_signin">Если существует аккаунт? Вход</string>
+    <string name="toast_emty_fields">Заполните все поля</string>
+    <string name="toast_pass_error">Пароли не совпадают</string>
+    <string name="toast_pass_match">Пароли совпадают</string>
+    <string name="toast_pass_strength">Надежность пароля</string>
+    <string name="txt_pass_weak">Слабый</string>
+    <string name="txt_pass_medium">Средний</string>
+    <string name="txt_pass_strong">Сильный</string>
+    <string name="toast_pass_weak">Пароль слишком слабый. Пожалуйста, сделайте его надёжнее.</string>
+    <!-- TODO: Remove or change this placeholder text -->
+    <string name="hello_blank_fragment">Hello blank fragment</string>
+</resources>

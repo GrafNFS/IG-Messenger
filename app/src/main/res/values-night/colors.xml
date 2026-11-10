@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Тёмная тема автоматически подхватит эти цвета -->
+    <color name="background_light">#1A1A1A</color>
+    <color name="text_primary_light">#FFFFFF</color>
+    <color name="text_secondary_light">#B0B0B0</color>
+    <color name="navigation_light">#CC1A1A1A</color>
+    <color name="gray_light">#2A2A2A</color>
+    <color name="white">#1A1A1A</color> <!-- Фон станет тёмным -->
+    <color name="black">#FFFFFF</color>  <!-- Текст станет белым -->
+</resources>

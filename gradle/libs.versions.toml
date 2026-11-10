@@ -1,0 +1,99 @@
+[versions]
+agp = "9.2.1"
+coreKtx = "1.10.1"
+junit = "4.13.2"
+junitVersion = "1.1.5"
+espressoCore = "3.5.1"
+appcompat = "1.6.1"
+material = "1.10.0"
+activityKtx = "1.8.0"
+constraintlayout = "2.1.4"
+circleimageview = "3.1.0"
+materialVersion = "1.14.0-rc01"
+recyclerview = "1.4.0"
+securityCrypto = "1.1.0"
+retrofit = "3.0.0"
+converterGson = "3.0.0"
+loggingInterceptor = "4.12.0"
+libsignalAndroid = "0.76.1"
+libsignalClient = "0.76.1"
+desugar_jdk_libs = "2.1.5"
+desugar_jdk_libsVersion = "2.1.4"
+socketIoClient = "2.1.2"
+picasso = "2.71828"
+kotlin = "2.1.0"
+# Версия KSP, совместимая с Kotlin 2.1.0
+ksp = "2.1.0-1.0.29"
+# Актуальная стабильная версия Room
+room = "2.7.0"
+exifinterface = "1.4.2"
+autoupdater = "*"
+photoview = "*"
+photoviewVersion = "2.3.0"
+autoupdaterVersion = "RELEASE_TAG"
+lightcompressor = "1.3.2"
+media3Exoplayer = "1.11.1"
+media3Ui = "1.11.1"
+workRuntimeKtx = "2.12.0-rc01"
+jsoup = "1.16.1"
+waveformseekbar = "3.1.0"
+amplituda = "2.2.2"
+waveformseekbarVersion = "5.0.2"
+amplitudaVersion = "x.y.z"
+githubAmplituda = "2.2.3"
+githubAmplitudaVersion = "2.3.1"
+githubAutoupdater = "1.0.1"
+firebaseBom = "34.19.0"
+firebaseMessagingKtx = "24.1.2"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
+androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
+androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+androidx-activity-ktx = { group = "androidx.activity", name = "activity-ktx", version = "1.13.0" }
+androidx-constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }
+circleimageview = { group = "de.hdodenhof", name = "circleimageview", version.ref = "circleimageview" }
+google-material = { group = "com.google.android.material", name = "material", version.ref = "materialVersion" }
+androidx-recyclerview = { group = "androidx.recyclerview", name = "recyclerview", version.ref = "recyclerview" }
+androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
+retrofit = { group = "com.squareup.retrofit2", name = "retrofit", version.ref = "retrofit" }
+converter-gson = { group = "com.squareup.retrofit2", name = "converter-gson", version.ref = "converterGson" }
+logging-interceptor = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "loggingInterceptor" }
+libsignal-android = { group = "org.signal", name = "libsignal-android", version = "0.58.0" }
+libsignal-client = { group = "org.signal", name = "libsignal-client", version.ref = "libsignalClient" }
+desugar_jdk_libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugar_jdk_libs" }
+tools-desugar_jdk_libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugar_jdk_libsVersion" }
+socket-io-client = { group = "io.socket", name = "socket.io-client", version.ref = "socketIoClient" }
+picasso = { group = "com.squareup.picasso", name = "picasso", version.ref = "picasso" }
+room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version.ref = "exifinterface" }
+autoupdater = { group = "com.github.CSAbhiOnline", name = "AutoUpdater", version.ref = "autoupdater" }
+photoview = { group = "com.github.chrisbanes", name = "PhotoView", version.ref = "photoview" }
+chrisbanes-photoview = { group = "com.github.chrisbanes", name = "PhotoView", version.ref = "photoviewVersion" }
+csabhionline-autoupdater = { group = "com.github.CSAbhiOnline", name = "AutoUpdater", version.ref = "autoupdaterVersion" }
+lightcompressor = { group = "com.github.AbedElazizShe", name = "LightCompressor", version.ref = "lightcompressor" }
+androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3Exoplayer" }
+androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3Ui" }
+androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "workRuntimeKtx" }
+jsoup = { group = "org.jsoup", name = "jsoup", version.ref = "jsoup" }
+waveformseekbar = { group = "com.github.masoudss", name = "waveformseekbar", version.ref = "waveformseekbar" }
+amplituda = { group = "com.github.lincollincol", name = "amplituda", version.ref = "amplituda" }
+massoudss-waveformseekbar = { group = "com.github.massoudss", name = "waveformSeekBar", version.ref = "waveformseekbarVersion" }
+lincollincol-amplituda = { group = "com.github.lincollincol", name = "amplituda", version.ref = "amplitudaVersion" }
+github-amplituda = { group = "com.github.lincollincol", name = "amplituda", version.ref = "githubAmplituda" }
+com-github-lincollincol-amplituda = { group = "com.github.lincollincol", name = "amplituda", version.ref = "githubAmplitudaVersion" }
+github-autoupdater = { group = "com.github.CSAbhiOnline", name = "AutoUpdater", version.ref = "githubAutoupdater" }
+firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
+firebase-messaging-ktx = { group = "com.google.firebase", name = "firebase-messaging-ktx", version.ref = "firebaseMessagingKtx" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+google-ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+
+

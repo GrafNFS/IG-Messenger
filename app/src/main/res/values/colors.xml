@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Основные цвета -->
+    <color name="white">#FFFFFF</color>
+    <color name="black">#1A1A1A</color>
+
+    <!-- Акцентные цвета -->
+    <color name="primary">#E53935</color>
+    <color name="primary_red">#FF4757</color>
+    <color name="strength_medium">#FF9800</color> <!-- Оранжевый -->
+    <color name="primary_blue">#5B8CFF</color>
+    <color name="gray_light">#F5F7FA</color>
+    <color name="gray_button">#9E9E9E</color>
+
+    <!-- Light Theme -->
+    <color name="background_light">#FFFFFF</color>
+    <color name="text_primary_light">#1A1A1A</color>
+    <color name="text_secondary_light">#666666</color>
+    <color name="navigation_light">#CCFFFFFF</color>
+
+    <!-- Dark Theme -->
+    <color name="background_dark">#1A1A1A</color>
+
+    <!-- Сообщения -->
+    <color name="message_sent">#5B8CFF</color>
+    <color name="message_incoming">#3A3A3A</color>
+    <color name="message_received_out">#5b97ff</color>
+    <color name="message_received_in">#9E9E9E</color>
+    <color name="highlight_color">#40FFFFFF</color>
+
+    <!-- Статусы -->
+    <color name="online">#4CAF50</color>
+</resources>
