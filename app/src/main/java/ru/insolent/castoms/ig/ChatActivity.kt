@@ -1319,4 +1319,9 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
         typingAnimator?.cancel()
         typingAnimator = null
     }
+
+    override fun onStop() {
+        super.onStop()
+        currentOpenChatId = null
+    }
 }

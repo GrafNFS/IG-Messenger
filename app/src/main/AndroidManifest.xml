@@ -42,11 +42,8 @@
         <activity android:name=".OtpVerificationActivity" />
         <activity android:name=".MainActivity" />
         <activity android:name=".ChatActivity" />
-        <activity android:name=".ProfileActivity" />
-        <activity android:name=".ContactsActivity" />
         <activity
-            android:name=".FolderSettingsActivity"
-            android:parentActivityName=".ProfileActivity" />
+            android:name=".FolderSettingsActivity" />
 
         <service
             android:name=".service.MessageReceiverService"
