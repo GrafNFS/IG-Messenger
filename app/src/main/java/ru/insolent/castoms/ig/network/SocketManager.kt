@@ -161,12 +161,13 @@ object SocketManager {
     }
 
     // 📤 Отправка зашифрованного сообщения
-    fun sendEncryptedMessage(targetUserId: String, payload: EncryptedPayload, messageId: String): Boolean {
+    fun sendEncryptedMessage(targetUserId: String, payload: EncryptedPayload, messageId: String, typeMsg: String): Boolean {
         if (socket?.connected() != true) return false
 
         // ✅ messageId на верхнем уровне, как ждёт сервер
         val data = JSONObject().apply {
             put("to", targetUserId)
+            put("typeMsg", typeMsg)
             put("messageId", messageId)  // ✅ Здесь, а не внутри payload!
             put("payload", JSONObject().apply {
                 put("type", payload.type)
@@ -174,7 +175,7 @@ object SocketManager {
             })
         }
         socket?.emit("private_message", data)
-        Log.d(TAG, "📤 Sent message $messageId to $targetUserId")
+        Log.d(TAG, "📤 Sent message $messageId to $targetUserId typeMsg $typeMsg")
         return true
     }
 

@@ -85,9 +85,10 @@ interface CryptoDao {
         MessageEntity::class,  // ✅ Добавили MessageEntity
         ContactEntity::class,
         AttachmentEntity::class,
-        UserProfileEntity::class
+        UserProfileEntity::class,
+        SignalRecord::class
     ],
-    version = 3  // ✅ Увеличили версию для миграции
+    version = 4  // ✅ Увеличили версию для миграции
 )
 abstract class CryptoDatabase : RoomDatabase() {
     abstract fun cryptoDao(): CryptoDao
@@ -107,7 +108,7 @@ abstract class CryptoDatabase : RoomDatabase() {
                     "crypto_store"
                 )
                     // ✅ Если нужно, добавь миграцию:
-                    .addMigrations(MIGRATION_2_3)
+                    .addMigrations(MIGRATION_3_4)
                     .build().also { INSTANCE = it }
             }
         }

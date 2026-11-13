@@ -39,7 +39,7 @@ interface ApiService {
     @GET("api/friend-requests/pending")
     suspend fun getPendingRequests(@Query("userId") userId: String): Response<List<FriendRequestDto>>
 
-    @GET("api/frends-requests/count")
+    @GET("api/friends-requests/count")
     suspend fun getPendingCountRequests(@Query("userId") userId: String): Response<Int>
 
     @POST("api/friend-requests/respond")
@@ -77,10 +77,10 @@ interface ApiService {
     @GET("api/updateapp")
     suspend fun getCheckUpdate(): Response<AppCheckVersion>
 
-    @GET("myprofile")
+    @GET("api/myprofile")
     suspend fun getMyProfile(): Response<UserProfileDto>
 
-    @PUT("myprofile")
+    @PUT("api/myprofile")
     suspend fun updateMyProfile(@Body request: UpdateProfileRequest): Response<UserProfileDto>
 
     @POST("api/devices/register")

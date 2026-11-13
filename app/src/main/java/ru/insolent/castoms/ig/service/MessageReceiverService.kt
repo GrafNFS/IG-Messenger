@@ -57,6 +57,11 @@ class MessageReceiverService : Service() {
 
         Log.d(TAG, "Service created, setting up global socket listeners...")
 
+        /*val response = NetworkClient.apiService.getChatHistory(contactId, myId)
+        if (response.isSuccessful && response.body() != null) {
+
+        }*/
+
         // ✅ 1. Слушаем входящие сообщения
         SocketManager.onMessageReceived = { from, payload, messageId, timestamp ->
             serviceScope.launch { handleIncomingMessage(from, payload, messageId, timestamp) }

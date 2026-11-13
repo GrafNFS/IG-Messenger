@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.text.TextUtils.isEmpty
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.FirebaseMessagingService
@@ -38,15 +39,16 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             val messageId = remoteMessage.data["messageId"] ?: return
             val timestamp = remoteMessage.data["timestamp"]?.toLongOrNull() ?: System.currentTimeMillis()
             val encryptedPayloadJson = remoteMessage.data["encryptedPayload"] ?: return
+            val typeMsg = remoteMessage.data["typeMsg"] ?: return
 
             // Нам нельзя блокировать этот поток, запускаем обработку в корутине
             serviceScope.launch {
-                processBackgroundPushMessage(from, messageId, timestamp, encryptedPayloadJson)
+                processBackgroundPushMessage(from, messageId, timestamp, encryptedPayloadJson, typeMsg)
             }
         }
     }
 
-    private suspend fun processBackgroundPushMessage(from: String, messageId: String, timestamp: Long, payloadJson: String) {
+    private suspend fun processBackgroundPushMessage(from: String, messageId: String, timestamp: Long, payloadJson: String, typeMsg: String) {
         try {
             val sessionManager = SessionManager(applicationContext)
             val myId = sessionManager.getUserId() ?: return
@@ -55,31 +57,51 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             val cryptoManager = MessageCryptoManager(myId, applicationContext)
             val messageManager = MessageManager(applicationContext)
 
-            // 1. Десериализуем зашифрованный payload, пришедший из пуша
-            val payload = Gson().fromJson(payloadJson, EncryptedPayload::class.java)
+            if (payloadJson.isNotEmpty()) {
+                // 1. Десериализуем зашифрованный payload, пришедший из пуша
+                val payload = Gson().fromJson(payloadJson, EncryptedPayload::class.java)
 
-            // 2. 🌟 РАСШИФРОВЫВАЕМ сообщение прямо в фоне, пока телефон спит!
-            val messageContent = cryptoManager.decryptMessage(payload, from)
-            val attachments = messageContent.attachments
+                // 2. 🌟 РАСШИФРОВЫВАЕМ сообщение прямо в фоне, пока телефон спит!
+                val messageContent = cryptoManager.decryptMessage(payload, from)
+                val attachments = messageContent.attachments
 
-            // 3. Определяем тип контента (наша старая отлаженная логика)
-            val messageType = when {
-                attachments?.any { it.mediaType.startsWith("audio") } == true -> "audio"
-                attachments?.any { it.mediaType.startsWith("video") } == true -> "video"
-                !attachments.isNullOrEmpty() -> "image"
-                else -> "text"
+                // 3. Определяем тип контента (наша старая отлаженная логика)
+                val messageType = when {
+                    attachments?.any { it.mediaType.startsWith("audio") } == true -> "audio"
+                    attachments?.any { it.mediaType.startsWith("video") } == true -> "video"
+                    !attachments.isNullOrEmpty() -> "image"
+                    else -> "text"
+                }
+
+                // 4. 🌟 СОХРАНЯЕМ В БД ROOM
+                messageManager.saveIncomingMessage(
+                    chatId = from,
+                    senderId = from,
+                    content = messageContent.text,
+                    timestamp = timestamp,
+                    messageId = messageId,
+                    messageType = messageType,
+                    attachments = attachments
+                )
+                Log.d(TAG, "✅ Пуш расшифрован и сохранен в Room в фоне!")
+
+
+                // 5. Показываем системную плашку уведомления, ЕСЛИ чат с этим пользователем сейчас НЕ открыт на экране
+                if (ChatActivity.currentOpenChatId != from) {
+                    showNotification(from, messageContent.text.ifEmpty { "Вложение: $messageType" })
+                }
             }
-
-            // 4. 🌟 СОХРАНЯЕМ В БД ROOM
-            messageManager.saveIncomingMessage(
-                chatId = from, senderId = from, content = messageContent.text,
-                timestamp = timestamp, messageId = messageId, messageType = messageType, attachments = attachments
-            )
-            Log.d(TAG, "✅ Пуш расшифрован и сохранен в Room в фоне!")
-
-            // 5. Показываем системную плашку уведомления, ЕСЛИ чат с этим пользователем сейчас НЕ открыт на экране
-            if (ChatActivity.currentOpenChatId != from) {
-                showNotification(from, messageContent.text.ifEmpty { "Вложение: $messageType" })
+            else {
+                val notificationText = when {
+                    typeMsg == "audio" -> "🎙️ Голосовое сообщение"
+                    typeMsg == "video" -> "🎥 Видео"
+                    typeMsg == "image" -> "📷 Фото"
+                    else -> "Новое сообщение"
+                }
+                // 5. Показываем системную плашку уведомления, ЕСЛИ чат с этим пользователем сейчас НЕ открыт на экране
+                if (ChatActivity.currentOpenChatId != from) {
+                    showNotification(from, notificationText)
+                }
             }
 
         } catch (e: Exception) {

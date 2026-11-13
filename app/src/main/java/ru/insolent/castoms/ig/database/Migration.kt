@@ -41,3 +41,15 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
         """.trimIndent())
     }
 }
+
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL("""
+            CREATE TABLE IF NOT EXISTS `signal_records` (
+                `key` TEXT NOT NULL,
+                `encryptedValue` TEXT NOT NULL,
+                PRIMARY KEY(`key`)
+            )
+        """.trimIndent())
+    }
+}

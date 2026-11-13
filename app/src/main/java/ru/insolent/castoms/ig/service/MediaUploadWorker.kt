@@ -36,6 +36,11 @@ class MediaUploadWorker(
             return Result.failure()
         }
 
+        val typeMsg = inputData.getString("typeMsg") ?: run {
+            Log.e("MediaUploadWorker", "❌ КРИТИЧЕСКАЯ ОШИБКА: typeMsg пришел null из инпут-даты")
+            return Result.failure()
+        }
+
         Log.d("MediaUploadWorker", "🚀 Воркер запущен для messageId: $messageId, contactId: $contactId")
 
         val messageManager = MessageManager(applicationContext)
@@ -107,7 +112,7 @@ class MediaUploadWorker(
             }
 
             Log.d("MediaUploadWorker", "📨 Все файлы на сервере. Отправляем сокет...")
-            val isSocketSent = SocketManager.sendEncryptedMessage(contactId, payloadObject, messageId)
+            val isSocketSent = SocketManager.sendEncryptedMessage(contactId, payloadObject, messageId, typeMsg)
             Log.d("MediaUploadWorker", "🔌 Статус отправки сокета: $isSocketSent")
 
             if (isSocketSent) {

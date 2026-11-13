@@ -2,6 +2,7 @@ package ru.insolent.castoms.ig.network
 
 import android.content.Context
 import android.util.Log
+import com.google.android.datatransport.BuildConfig
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -17,15 +18,17 @@ object NetworkClient {
     private lateinit var appContext: Context
 
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
-        level = HttpLoggingInterceptor.Level.BODY
+        if (BuildConfig.DEBUG) {
+            level = HttpLoggingInterceptor.Level.BODY
+        } else {
+            level = HttpLoggingInterceptor.Level.NONE
+        }
     }
 
     private val authInterceptor = Interceptor { chain ->
         // ✅ Всегда читаем токен из SessionManager (актуальные данные)
         val sessionManager = SessionManager(appContext)
         val token = sessionManager.getToken()
-
-        //Log.d("NetworkClient", "✅ Token authorization bearer $token")
 
         val request = if (!token.isNullOrEmpty()) {
             chain.request().newBuilder()

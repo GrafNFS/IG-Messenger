@@ -419,7 +419,6 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
                     // ✅ НОВОЕ: Если есть выбранные медиа, отправляем их
                     else if (selectedMedia.isNotEmpty()) {
                         val mediaToSend = selectedMedia.toList()
-                        val caption = text // Текст из поля ввода
 
                         selectedMedia.clear()
                         updateMediaPreview()
@@ -461,7 +460,7 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
                         binding.etMessageInput.text.clear()
                         binding.rvMessages.scrollToPosition(messageAdapter.itemCount - 1)
 
-                        val sent = SocketManager.sendEncryptedMessage(contactId, encrypted, messageId)
+                        val sent = SocketManager.sendEncryptedMessage(contactId, encrypted, messageId, "text")
 
                         if (sent) {
                             messageManager.updateStatus(contactId, messageId, MessageStatus.SENT)
@@ -671,7 +670,7 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
             Log.d(TAG, "📝 Аудиосообщение успешно записано в локальную БД Room под ID: $messageId")
 
             // Запуск WorkManager
-            val inputData = Data.Builder().putString("messageId", messageId).putString("contactId", contactId).build()
+            val inputData = Data.Builder().putString("messageId", messageId).putString("contactId", contactId).putString("typeMsg", "audio").build()
             val uploadWorkRequest = OneTimeWorkRequestBuilder<MediaUploadWorker>()
                 .setInputData(inputData)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
@@ -934,7 +933,7 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
                 for (msg in pending) {
                     try {
                         val encryptedPayload = Gson().fromJson(msg.encryptedPayload, EncryptedPayload::class.java)
-                        val sent = SocketManager.sendEncryptedMessage(contactId, encryptedPayload, msg.messageId)
+                        val sent = SocketManager.sendEncryptedMessage(contactId, encryptedPayload, msg.messageId, msg.messageType)
                         messageManager.updateStatus(contactId, msg.messageId, if (sent) MessageStatus.SENT else MessageStatus.FAILED)
                     } catch (e: Exception) {
                         messageManager.updateStatus(contactId, msg.messageId, MessageStatus.FAILED)
@@ -952,69 +951,68 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
                     val dtos = response.body()!!
 
                     val messagesToSave = mutableListOf<MessageEntity>()
-                    val attachmentsToSave = mutableListOf<AttachmentEntity>()
 
                     for (dto in dtos) {
                         val messageId = dto.id ?: continue
                         val senderId = dto.senderId.takeIf { it.isNotBlank() } ?: continue
-                        if (!dto.isIncoming) continue
+                        //if (!dto.isIncoming) continue
 
-                        val payloadJson = Gson().toJson(dto.payload)
-                        val messageContent = try {
+                        try {
+                            val payloadJson = Gson().toJson(dto.payload)
                             val payload = Gson().fromJson(payloadJson, EncryptedPayload::class.java)
-                            cryptoManager.decryptMessage(payload, senderId)
+                            val messageContent = cryptoManager.decryptMessage(payload, senderId)
+
+                            val attachments = messageContent.attachments
+
+                            val messageType = when {
+                                messageContent?.attachments?.any { it.mediaType.startsWith("audio") } == true -> "audio"
+                                messageContent.attachments?.any { it.mediaType == "image/gif" } == true -> "gif"
+                                messageContent.attachments?.any { it.mediaType.startsWith("video") } == true -> "video"
+                                !messageContent.attachments.isNullOrEmpty() -> "image"
+                                else -> "text"
+                            }
+
+                            // Сохраняем в БД Room
+                            messageManager.saveIncomingMessage(
+                                chatId = senderId, senderId = senderId, content = messageContent.text,
+                                timestamp = dto.timestamp, messageId = messageId, messageType = messageType, attachments = attachments
+                            )
+
+                            attachments?.forEach { attachment ->
+                                val fileId = attachment.fileId
+                                if (!downloadingFiles.add(fileId)) return@forEach
+
+                                lifecycleScope.launch {
+                                    try {
+                                        val localPath = messageManager.downloadAndDecryptMedia(
+                                            context = this@ChatActivity, fileId = fileId,
+                                            encryptedKeyBase64 = attachment.encryptedKey, mediaType = attachment.mediaType ?: "image/jpeg",
+                                            fileName = attachment.fileName ?: "file", messageId = messageId, expectedFileSize = attachment.fileSize ?: 0L,
+                                            onProgress = {}
+                                        )
+
+                                        if (localPath != null) {
+                                            messageManager.updateAttachmentLocalPath(messageId, fileId, localPath)
+                                            NetworkClient.apiService.deleteMedia(fileId)
+                                        }
+                                    } finally {
+                                        downloadingFiles.remove(fileId)
+                                    }
+                                }
+                            }
                         } catch (e: Exception) {
                             Log.w(TAG, "Could not decrypt outgoing $messageId", e)
                             null
                         }
-
-                        val messageType = when {
-                            messageContent?.attachments?.any { it.mediaType.startsWith("audio") } == true -> "audio"
-                            messageContent?.attachments?.any { it.mediaType.startsWith("video") } == true -> "video"
-                            !messageContent?.attachments.isNullOrEmpty() -> "image"
-                            else -> "text"
-                        }
-
-                        messagesToSave.add(
-                            MessageEntity(
-                                chatId = contactId,
-                                messageId = messageId,
-                                senderId = senderId,
-                                content = messageContent?.text ?: "",
-                                encryptedPayload = payloadJson,
-                                timestamp = dto.timestamp,
-                                status = MessageStatus.DELIVERED,
-                                isIncoming = true,
-                                replyToMessageId = messageContent?.replyToMessageId,
-                                replyToSenderName = messageContent?.replyToSenderName,
-                                replyToContent = messageContent?.replyToContent,
-                                messageType = messageType
-                            )
-                        )
-
-                        messageContent?.attachments?.forEach { att ->
-                            attachmentsToSave.add(
-                                AttachmentEntity(
-                                    messageId = messageId,
-                                    fileId = att.fileId,
-                                    encryptedKey = att.encryptedKey,
-                                    mediaType = att.mediaType,
-                                    fileName = att.fileName,
-                                    fileSize = att.fileSize,
-                                    localFilePath = null,
-                                    downloadProgress = 0,
-                                    uploadProgress = 0
-                                )
-                            )
-                        }
                     }
 
-                    if (messagesToSave.isNotEmpty()) {
+                    /*if (messagesToSave.isNotEmpty()) {
                         messageManager.saveMessagesBatch(messagesToSave)
                     }
                     if (attachmentsToSave.isNotEmpty()) {
                         messageManager.saveAttachmentsBatch(attachmentsToSave)
-                    }
+                    }*/
+
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Sync failed", e)
@@ -1063,7 +1061,8 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
                         SocketManager.sendEncryptedMessage(
                             contactId,
                             payloadObject,
-                            message.messageId
+                            message.messageId,
+                            "text"
                         )
 
                     if (sent) {
@@ -1269,6 +1268,7 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
             val inputData = Data.Builder()
                 .putString("messageId", messageId)
                 .putString("contactId", contactId)
+                .putString("typeMsg", messageType)
                 .build()
 
             val uploadWorkRequest = OneTimeWorkRequestBuilder<MediaUploadWorker>()

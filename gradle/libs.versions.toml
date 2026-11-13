@@ -27,8 +27,6 @@ ksp = "2.1.0-1.0.29"
 # Актуальная стабильная версия Room
 room = "2.7.0"
 exifinterface = "1.4.2"
-autoupdater = "*"
-photoview = "*"
 photoviewVersion = "2.3.0"
 autoupdaterVersion = "RELEASE_TAG"
 lightcompressor = "1.3.2"
@@ -72,8 +70,6 @@ room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "
 room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
 room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version.ref = "exifinterface" }
-autoupdater = { group = "com.github.CSAbhiOnline", name = "AutoUpdater", version.ref = "autoupdater" }
-photoview = { group = "com.github.chrisbanes", name = "PhotoView", version.ref = "photoview" }
 chrisbanes-photoview = { group = "com.github.chrisbanes", name = "PhotoView", version.ref = "photoviewVersion" }
 csabhionline-autoupdater = { group = "com.github.CSAbhiOnline", name = "AutoUpdater", version.ref = "autoupdaterVersion" }
 lightcompressor = { group = "com.github.AbedElazizShe", name = "LightCompressor", version.ref = "lightcompressor" }
