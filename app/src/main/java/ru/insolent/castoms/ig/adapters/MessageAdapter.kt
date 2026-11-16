@@ -1,7 +1,5 @@
 package ru.insolent.castoms.ig.adapters
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.media.MediaPlayer
 import android.os.Handler
@@ -12,7 +10,6 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupMenu
-import android.widget.SeekBar
 import android.widget.TextView
 import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.content.ContextCompat
@@ -29,26 +26,37 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import android.util.Log
-import android.widget.Toast
 import com.linc.amplituda.Amplituda
 import com.masoudss.lib.WaveformSeekBar
 import java.util.Calendar
 
 
+/**
+ * ⚠️ КЛЮЧЕВЫЕ ИСПРАВЛЕНИЯ (были краши "Inconsistency detected"):
+ * 1. Единый источник данных — chatItems. Старый параллельный список `messages`
+ *    использовался для notify с ИНДЕКСАМИ ИЗ ДРУГОГО СПИСКА (со съехавшими
+ *    плашками дат) — это и давал рассинхрон с RecyclerView.
+ * 2. Все мутации + notify только на MAIN-потоке (mainGuard). Раньдаптера
+ *    могли дергаться с потоков Socket.IO → падение при layout.
+ * 3. submitList синхронизирует оба представления списка атомарно.
+ */
 class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     private val chatItems = mutableListOf<ChatItem>()
+    // Зеркало чистых сообщений (без плашек дат) — для совместимости со старыми вызовами
+    private val messages = mutableListOf<MessageWithAttachments>()
+
     companion object {
         private const val TYPE_MESSAGE = 0
         private const val TYPE_DATE_HEADER = 1
     }
-    private val messages = mutableListOf<MessageWithAttachments>()
+
     private val TAG = "MessageAdapter"
 
     // 🌟 Поля для управления общим плеером голосовых сообщений
     private var mediaPlayer: MediaPlayer? = null
     private var currentlyPlayingMessageId: String? = null
-    private var currentPlayingWaveform: WaveformSeekBar? = null // 🌟 СТАЛО
+    private var currentPlayingWaveform: WaveformSeekBar? = null
     private var currentPlayingDurationText: TextView? = null
     private var currentPlayButton: ImageView? = null
     private val handler = Handler(Looper.getMainLooper())
@@ -71,7 +79,6 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         this.actionListener = listener
     }
 
-    // 🌟 2. Метод установки слушателя для перезапуска загрузки (вызовем в ChatActivity)
     fun setRetryDownloadListener(listener: OnRetryDownloadListener) {
         this.retryDownloadListener = listener
     }
@@ -88,12 +95,19 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         fun onMediaClick(attachments: List<AttachmentEntity>, position: Int)
     }
 
-    // 🌟 3. Интерфейс для обработки повторного скачивания медиа
     interface OnRetryDownloadListener {
         fun onRetryClick(attachment: AttachmentEntity)
     }
 
-    // 🌟 ОПРЕДЕЛЯЕМ ВИД ЯЧЕЙКИ НА ЭКРАНЕ
+    // ============ ✅ ГЛАВНАЯ ЗАЩИТА: всё на main-потоке ============
+    private inline fun mainGuard(crossinline body: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            body()
+        } else {
+            Handler(Looper.getMainLooper()).post { body() }
+        }
+    }
+
     override fun getItemViewType(position: Int): Int {
         return when (chatItems[position]) {
             is ChatItem.Message -> TYPE_MESSAGE
@@ -101,6 +115,7 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         }
     }
 
+    /** Легаси-метод мгновенной вставки (оптимистичный UI). Добавляет с плашкой даты при смене дня */
     fun addMessage(
         messageId: String,
         text: String,
@@ -110,46 +125,62 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         messageType: String = "text",
         attachments: List<AttachmentEntity>? = null
     ) {
-        val newMessage = MessageEntity(
-            chatId = "",
-            messageId = messageId,
-            senderId = if (isMe) "me" else "other",
-            content = text,
-            encryptedPayload = "",
-            timestamp = System.currentTimeMillis(),
-            status = status,
-            isIncoming = !isMe,
-            messageType = messageType,
-            replyToMessageId = null,
-            replyToSenderName = null,
-            replyToContent = null
-        )
+        mainGuard {
+            val newMessage = MessageEntity(
+                chatId = "",
+                messageId = messageId,
+                senderId = if (isMe) "me" else "other",
+                content = text,
+                encryptedPayload = "",
+                timestamp = System.currentTimeMillis(),
+                status = status,
+                isIncoming = !isMe,
+                messageType = messageType,
+                replyToMessageId = null,
+                replyToSenderName = null,
+                replyToContent = null
+            )
 
-        messages.add(MessageWithAttachments(newMessage, attachments ?: emptyList()))
-        notifyItemInserted(messages.size - 1)
+            val mwa = MessageWithAttachments(newMessage, attachments ?: emptyList())
+            messages.add(mwa)
+
+            val dateStr = getFormattedDateForHeader(mwa.message.timestamp)
+            val lastDateStr = (chatItems.lastOrNull() as? ChatItem.Message)
+                ?.let { getFormattedDateForHeader(it.messageWithAttachments.message.timestamp) }
+            if (lastDateStr != dateStr) {
+                chatItems.add(ChatItem.DateHeader(dateStr))
+            }
+            chatItems.add(ChatItem.Message(mwa))
+            notifyItemInserted(chatItems.size - 1)
+        }
     }
 
+    /** Полная перезагрузка списка из Room (вызывается из LiveData/Flow observer) */
     fun submitList(newMessages: List<MessageWithAttachments>) {
-        chatItems.clear()
-        if (newMessages.isEmpty()) {
-            notifyDataSetChanged()
-            return
-        }
+        mainGuard {
+            chatItems.clear()
+            messages.clear()
+            messages.addAll(newMessages)
 
-        var lastDateString = ""
-
-        for (item in newMessages) {
-            val currentDateString = getFormattedDateForHeader(item.message.timestamp)
-
-            // Если день этого сообщения отличается от предыдущего — вставляем плашку даты!
-            if (currentDateString != lastDateString) {
-                chatItems.add(ChatItem.DateHeader(currentDateString))
-                lastDateString = currentDateString
+            if (newMessages.isEmpty()) {
+                notifyDataSetChanged()
+                return@mainGuard
             }
 
-            chatItems.add(ChatItem.Message(item))
+            var lastDateString = ""
+
+            for (item in newMessages) {
+                val currentDateString = getFormattedDateForHeader(item.message.timestamp)
+
+                if (currentDateString != lastDateString) {
+                    chatItems.add(ChatItem.DateHeader(currentDateString))
+                    lastDateString = currentDateString
+                }
+
+                chatItems.add(ChatItem.Message(item))
+            }
+            notifyDataSetChanged()
         }
-        notifyDataSetChanged()
     }
 
     fun getMessageAt(position: Int): MessageEntity? {
@@ -189,7 +220,6 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         val tvAudioDuration: TextView = view.findViewById(R.id.tvAudioDuration)
     }
 
-    // 🌟 Холдер для плашки даты
     class DateHeaderViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val tvDateHeader: TextView = view.findViewById(R.id.tvDateHeader)
     }
@@ -208,13 +238,11 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
     override fun onBindViewHolder(rawHolder: RecyclerView.ViewHolder, position: Int) {
         val chatItem = chatItems[position]
 
-        // 🌟 1. ЕСЛИ ЭТО ПЛАШКА ДАТЫ — Отрисовываем текст дня ("Сегодня", "Вчера" или дату)
         if (rawHolder is DateHeaderViewHolder && chatItem is ChatItem.DateHeader) {
             rawHolder.tvDateHeader.text = chatItem.dateText
             return
         }
 
-        // 🌟 2. ЕСЛИ ЭТО ОБЫЧНОЕ СООБЩЕНИЕ — Выполняем всю вашу стандартную логику
         if (rawHolder is MessageViewHolder && chatItem is ChatItem.Message) {
             val item = chatItem.messageWithAttachments
             val message = item.message
@@ -225,25 +253,19 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 rawHolder.tvText.visibility = View.VISIBLE
                 rawHolder.tvText.text = message.content
 
-                // 🌟 АВТОПОДСВЕТКА И КЛИКАБЕЛЬНОСТЬ ССЫЛОК ВНУТРИ ТЕКСТА
                 android.text.util.Linkify.addLinks(
                     rawHolder.tvText,
                     android.text.util.Linkify.WEB_URLS
                 )
-                // Заставляем TextView правильно обрабатывать переходы по ссылкам
                 rawHolder.tvText.movementMethod = android.text.method.LinkMovementMethod.getInstance()
 
-                // 🌟 ИСПРАВЛЕНИЕ: Пробрасываем долгий клик из TextView наверх, в messageContainer
                 rawHolder.tvText.setOnLongClickListener {
                     rawHolder.messageContainer.performLongClick()
                 }
 
-                // Настраиваем цвет подсвеченной ссылки, чтобы она не сливалась с фоном пузыря
                 if (!message.isIncoming) {
-                    // Для ваших отправленных сообщений (на синем фоне) делаем ссылку, например, желтой или светло-голубой
                     rawHolder.tvText.setLinkTextColor(android.graphics.Color.parseColor("#80DEEA"))
                 } else {
-                    // Для входящих сообщений (на светлом фоне) делаем ссылку стандартной синей
                     rawHolder.tvText.setLinkTextColor(android.graphics.Color.BLUE)
                 }
             } else {
@@ -251,28 +273,21 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
             }
             rawHolder.tvTime.text = formatTimestamp(message.timestamp)
 
-            // 🌟 Сброс состояния аудио-контейнера перед проверкой
             rawHolder.audioContainer.visibility = View.GONE
-            // 🌟 Сбрасываем видимость контейнера превью ссылки для переиспользуемых ViewHolder
             rawHolder.linkPreviewContainer.visibility = View.GONE
             rawHolder.ivLinkPreview.visibility = View.GONE
 
-            // Проверяем, есть ли сохраненное превью ссылки в этом сообщении
             if (message.linkTitle != null || message.linkDescription != null) {
                 rawHolder.linkPreviewContainer.visibility = View.VISIBLE
 
-                // (Ваш код настройки цветов и текста...)
                 rawHolder.tvLinkTitle.text = message.linkTitle ?: ""
                 rawHolder.tvLinkDescription.text = message.linkDescription ?: ""
 
-                // 🌟 ДОБАВЛЯЕМ КЛИК ПО КАРТОЧКЕ ПРЕВЬЮ
                 rawHolder.linkPreviewContainer.setOnClickListener {
-                    // Вытаскиваем ссылку из текста сообщения
                     val url =
                         ru.insolent.castoms.ig.utils.LinkPreviewHelper.extractUrl(message.content)
                     if (url != null) {
                         try {
-                            // Создаем системный Intent для открытия ссылки в браузере
                             val intent = android.content.Intent(
                                 android.content.Intent.ACTION_VIEW,
                                 android.net.Uri.parse(url)
@@ -288,12 +303,10 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                     }
                 }
 
-                // Делаем контейнер визуально кликабельным (добавляем эффект волны при тапе)
                 rawHolder.linkPreviewContainer.isClickable = true
                 rawHolder.linkPreviewContainer.foreground =
                     context.getDrawable(android.R.drawable.list_selector_background)
 
-                // Если у ссылки есть картинка — грузим её через Picasso
                 if (!message.linkImageUrl.isNullOrEmpty()) {
                     rawHolder.ivLinkPreview.visibility = View.VISIBLE
                     Picasso.get()
@@ -304,7 +317,6 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 }
             }
 
-            // Проверка: является ли сообщение голосовым
             if (message.messageType == "audio") {
                 rawHolder.audioContainer.visibility = View.VISIBLE
                 rawHolder.tvText.visibility = View.GONE
@@ -315,22 +327,15 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                     val file = File(audioAttachment.localFilePath)
                     if (file.exists()) {
 
-                        // 🌟 ГЕНЕРАЦИЯ ВОЛНЫ: Используем Amplituda для считывания высот звука из локального файла
                         try {
                             val amplituda = Amplituda(context)
-                            // Считываем аудиофайл
                             val output = amplituda.processAudio(file).get()
-
-                            // Получаем массив чисел (высот) звука
                             val amplitudesList = output.amplitudesAsList()
-
-                            // Передаем их в нашу кастомную вьюшку волны
                             rawHolder.audioWaveform.setSampleFrom(amplitudesList.toIntArray())
                         } catch (e: Exception) {
                             Log.e(TAG, "Ошибка чтения амплитуды звука", e)
                         }
 
-                        // Восстанавливаем состояние, если это сообщение играет прямо сейчас
                         if (currentlyPlayingMessageId == message.messageId) {
                             currentPlayingWaveform = rawHolder.audioWaveform
                             currentPlayingDurationText = rawHolder.tvAudioDuration
@@ -338,7 +343,7 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                             rawHolder.btnPlayAudio.setImageResource(android.R.drawable.ic_media_pause)
                         } else {
                             rawHolder.btnPlayAudio.setImageResource(android.R.drawable.ic_media_play)
-                            rawHolder.audioWaveform.progress = 0f // Сбрасываем закрашивание полосок
+                            rawHolder.audioWaveform.progress = 0f
                             rawHolder.tvAudioDuration.text = "0:00"
                         }
 
@@ -347,7 +352,7 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                                 messageId = message.messageId,
                                 file = file,
                                 btnPlay = rawHolder.btnPlayAudio,
-                                waveform = rawHolder.audioWaveform, // Передаем волну
+                                waveform = rawHolder.audioWaveform,
                                 tvDuration = rawHolder.tvAudioDuration
                             )
                         }
@@ -355,7 +360,6 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 }
             }
 
-            // ✅ Логика отображения картинок/видео
             if (attachments.isNotEmpty() && message.messageType != "audio") {
                 rawHolder.rvMessageImages.visibility = View.VISIBLE
 
@@ -406,7 +410,6 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 }
             }
 
-            // ✅ Обработка цитаты
             if (message.replyToMessageId != null && message.replyToContent != null) {
                 rawHolder.quoteContainer.visibility = View.VISIBLE
                 rawHolder.tvQuoteSenderName.text = message.replyToSenderName ?: "Неизвестно"
@@ -428,7 +431,6 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 rawHolder.quoteContainer.visibility = View.GONE
             }
 
-            // ✅ Настройка ограничений (справа/слева)
             val params = rawHolder.messageContainer.layoutParams as ConstraintLayout.LayoutParams
 
             if (!message.isIncoming) {
@@ -446,7 +448,6 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
                 rawHolder.messageContainer.setBackgroundResource(R.drawable.bg_message_sent)
                 rawHolder.tvText.setTextColor(ContextCompat.getColor(context, R.color.white))
-                // Красим элементы аудио под стиль отправленного сообщения
                 rawHolder.btnPlayAudio.backgroundTintList =
                     ContextCompat.getColorStateList(context, R.color.white)
                 rawHolder.btnPlayAudio.imageTintList =
@@ -458,7 +459,6 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 rawHolder.ivStatus.visibility = View.GONE
                 rawHolder.messageContainer.setBackgroundResource(R.drawable.bg_message_incoming)
                 rawHolder.tvText.setTextColor(ContextCompat.getColor(context, R.color.black))
-                // Красим элементы аудио под стиль полученного сообщения
                 rawHolder.btnPlayAudio.backgroundTintList =
                     ContextCompat.getColorStateList(context, R.color.black)
                 rawHolder.btnPlayAudio.imageTintList =
@@ -482,7 +482,6 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         }
     }
 
-    // 🌟 КРАСИВОЕ ФОРМАТИРОВАНИЕ ДАТЫ ("Сегодня", "Вчера" или "24 сентября")
     private fun getFormattedDateForHeader(timestamp: Long): String {
         val messageCalendar = Calendar.getInstance().apply { timeInMillis = timestamp }
         val nowCalendar = Calendar.getInstance()
@@ -505,7 +504,6 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         return isSameDay(messageCal, yesterdayCal)
     }
 
-    // 🌟 Логика переключения воспроизведения аудио-файла (Переписана под Waveform)
     private fun toggleAudioPlayback(messageId: String, file: File, btnPlay: ImageView, waveform: com.masoudss.lib.WaveformSeekBar, tvDuration: TextView) {
         if (currentlyPlayingMessageId == messageId) {
             if (mediaPlayer?.isPlaying == true) {
@@ -528,8 +526,6 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 try {
                     setDataSource(file.absolutePath)
                     prepare()
-                    // У WaveformSeekBar прогресс задается в процентах/долях,
-                    // но для простоты мы будем использовать миллисекунды, выставив max плеера
                     start()
 
                     tvDuration.text = formatAudioTime(duration)
@@ -547,7 +543,6 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         }
     }
 
-    // 🌟 Корутина/Runnable плавного закрашивания полосок звуковой волны
     private fun startSeekBarUpdate() {
         updateSeekBarRunnable?.let { handler.removeCallbacks(it) }
         updateSeekBarRunnable = object : Runnable {
@@ -556,12 +551,11 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                     if (player.isPlaying) {
                         val totalDuration = player.duration.toFloat()
                         if (totalDuration > 0) {
-                            // 🌟 Вычисляем процент прослушивания (от 0 до 100) и передаем в WaveformSeekBar
                             val progressPercent = (player.currentPosition.toFloat() / totalDuration) * 100
                             currentPlayingWaveform?.progress = progressPercent
                         }
                         currentPlayingDurationText?.text = formatAudioTime(player.currentPosition)
-                        handler.postDelayed(this, 50) // 50 мс для ультра-плавного закрашивания полосок
+                        handler.postDelayed(this, 50)
                     }
                 }
             }
@@ -575,7 +569,6 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         return String.format(Locale.getDefault(), "%d:%02d", minutes, seconds)
     }
 
-    // 🌟 Полный сброс состояния волнового плеера
     fun stopAudioPlayback() {
         updateSeekBarRunnable?.let { handler.removeCallbacks(it) }
         mediaPlayer?.let {
@@ -585,7 +578,7 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         mediaPlayer = null
 
         currentPlayButton?.setImageResource(android.R.drawable.ic_media_play)
-        currentPlayingWaveform?.progress = 0f // Очищаем закрашивание
+        currentPlayingWaveform?.progress = 0f
         currentPlayingDurationText?.text = "0:00"
 
         currentlyPlayingMessageId = null
@@ -598,28 +591,42 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         return (dp * context.resources.displayMetrics.density).toInt()
     }
 
+    // ✅ ИСПРАВЛЕНО: позиция ищется в chatItems (было — в messages, индексы съезжали из-за плашек дат)
     fun updateDownloadProgressForAttachment(messageId: String, fileId: String, progress: Int) {
-        val index = messages.indexOfFirst { it.message.messageId == messageId }
-        if (index != -1) {
-            val item = messages[index]
-            val updatedAttachments = item.attachments.map {
-                if (it.fileId == fileId) it.copy(downloadProgress = progress) else it
+        mainGuard {
+            val position = chatItems.indexOfFirst {
+                it is ChatItem.Message && it.messageWithAttachments.message.messageId == messageId
             }
-            messages[index] = item.copy(attachments = updatedAttachments)
-            notifyItemChanged(index)
+            if (position != -1) {
+                val item = (chatItems[position] as ChatItem.Message).messageWithAttachments
+                val updated = item.copy(
+                    attachments = item.attachments.map {
+                        if (it.fileId == fileId) it.copy(downloadProgress = progress) else it
+                    }
+                )
+                chatItems[position] = ChatItem.Message(updated)
+                messages.indexOfFirst { it.message.messageId == messageId }
+                    .takeIf { it != -1 }
+                    ?.let { messages[it] = updated }
+                notifyItemChanged(position)
+            }
         }
     }
 
     fun updateMessageStatus(messageId: String, newStatus: MessageStatus) {
-        val position = chatItems.indexOfFirst {
-            it is ChatItem.Message && it.messageWithAttachments.message.messageId == messageId
-        }
-        if (position != -1) {
-            val item = (chatItems[position] as ChatItem.Message).messageWithAttachments
-            chatItems[position] = ChatItem.Message(
-                item.copy(message = item.message.copy(status = newStatus))
-            )
-            notifyItemChanged(position)
+        mainGuard {
+            val position = chatItems.indexOfFirst {
+                it is ChatItem.Message && it.messageWithAttachments.message.messageId == messageId
+            }
+            if (position != -1) {
+                val item = (chatItems[position] as ChatItem.Message).messageWithAttachments
+                val updated = item.copy(message = item.message.copy(status = newStatus))
+                chatItems[position] = ChatItem.Message(updated)
+                messages.indexOfFirst { it.message.messageId == messageId }
+                    .takeIf { it != -1 }
+                    ?.let { messages[it] = updated }
+                notifyItemChanged(position)
+            }
         }
     }
 
@@ -629,7 +636,6 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
             popup.menu.add("Ответить")
             popup.menu.add("Копировать")
 
-            // Редактировать и удалять только СВОИ сообщения (!isIncoming)
             if (!message.isIncoming) {
                 popup.menu.add("Редактировать")
                 popup.menu.add("Удалить")
@@ -657,18 +663,17 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
     }
 
+    // ✅ ИСПРАВЛЕНО: вставка идёт в chatItems (messages лишь зеркалится) — раньше
+    // notifyItemInserted применялся к индексу из messages при dataset chatItems
     fun addMessageToPosition(position: Int, messageWithAttachments: MessageWithAttachments) {
-        if (position >= 0 && position <= messages.size) {
-            messages.add(position, messageWithAttachments)
-            notifyItemInserted(position)
-        } else {
-            // Если позиция невалидна, просто добавляем в конец
+        mainGuard {
             messages.add(messageWithAttachments)
-            notifyItemInserted(messages.size - 1)
+            val safePos = position.coerceIn(0, chatItems.size)
+            chatItems.add(safePos, ChatItem.Message(messageWithAttachments))
+            notifyItemInserted(safePos)
         }
     }
 
-    // 🌟 Обертка для элементов списка, чтобы объединить сообщения и даты
     sealed class ChatItem {
         data class Message(val messageWithAttachments: MessageWithAttachments) : ChatItem()
         data class DateHeader(val dateText: String) : ChatItem()

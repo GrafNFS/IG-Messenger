@@ -854,22 +854,26 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
     private fun observeMessages() {
         lifecycleScope.launch {
             // ✅ Используем новый метод, который возвращает сообщения вместе с вложениями
-            messageManager.observeChatHistoryWithAttachments(contactId).collect { messagesWithAttachments ->
-                val lastMessage = messagesWithAttachments.lastOrNull()?.message
-                if (lastMessage != null && lastMessage.isIncoming && System.currentTimeMillis() - lastMessage.timestamp < 5000) {
-                    if (isContactTyping) updateTypingIndicator(false)
-                }
 
-                val newUnreadMessages = messagesWithAttachments.filter { it.message.isIncoming && it.message.status != MessageStatus.READ }
-                if (newUnreadMessages.isNotEmpty()) {
-                    for (item in newUnreadMessages) {
-                        messageManager.updateMessageStatus(contactId, item.message.messageId, MessageStatus.READ)
-                        SocketManager.sendReadReceipt(contactId, item.message.messageId)
-                    }
-                }
+            messageManager.observeChatHistoryWithAttachments(contactId).collect { messagesWithAttachments ->
+                val layoutManager = binding.rvMessages.layoutManager as LinearLayoutManager
+                val oldCount = messageAdapter.itemCount
+                // "У низа" считаем ДО submitList: последняя видимая позиция
+                // не дальше чем за 2 элемента от конца
+                val wasNearBottom = layoutManager.findLastVisibleItemPosition() >= oldCount - 3
 
                 messageAdapter.submitList(messagesWithAttachments)
-                if (messagesWithAttachments.isNotEmpty()) binding.rvMessages.scrollToPosition(messagesWithAttachments.size - 1)
+
+                // post{} — выполнится ПОСЛЕ того, как RecyclerView перелэаит список.
+                // Без post скролл часто срабатывает по старому размеру/раскладке —
+                // отсюда "не проматывается при входе и при новых сообщениях".
+                binding.rvMessages.post {
+                    val newCount = messageAdapter.itemCount
+                    if (newCount == 0) return@post
+                    if (wasNearBottom || oldCount == 0) {
+                        binding.rvMessages.scrollToPosition(newCount - 1)
+                    }
+                }
             }
         }
     }
