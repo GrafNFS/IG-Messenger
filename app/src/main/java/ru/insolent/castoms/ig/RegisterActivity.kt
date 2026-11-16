@@ -175,6 +175,7 @@ class RegisterActivity : AppCompatActivity() {
                         NetworkClient.init(this@RegisterActivity)
 
                         // 3. !!! ПОДКЛЮЧАЕМ SOCKET !!!
+                        SocketManager.init(this@RegisterActivity)
                         SocketManager.connect(authResponse.user.id)
 
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

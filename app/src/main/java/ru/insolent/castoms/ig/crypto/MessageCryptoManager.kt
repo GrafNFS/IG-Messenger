@@ -20,25 +20,25 @@ class MessageCryptoManager(
     private val localDeviceId = 1
     private val TAG = "CryptoManager"
 
-    // ✅ Используем Room Database
     private val db = CryptoDatabase.getDatabase(context)
     private val dao = db.cryptoDao()
 
-    // ✅ Объявляем как lateinit, чтобы инициализировать в init
+    // ✅ Приватные ключи теперь через зашифрованное хранилище (Keystore)
+    private val secureStore = SecureKeyStore(context)
+
     private lateinit var identityKeyPair: IdentityKeyPair
     private var registrationId: Int
     private val store: SignalProtocolStore
 
     init {
-        // 1. Загружаем IdentityKey и RegistrationId из SharedPreferences
-        val prefs = context.getSharedPreferences("crypto_keys", Context.MODE_PRIVATE)
-        val identityPrivateB64 = prefs.getString("${localUserId}_identity_private", null)
-        val regId = prefs.getInt("${localUserId}_registration_id", -1)
+        // 1. Загружаем IdentityKey и RegistrationId (зашифрованное хранилище)
+        val identityPrivateB64 = secureStore.getString("${localUserId}_identity_private", null)
+        val regId = secureStore.getInt("${localUserId}_registration_id", -1)
 
         if (identityPrivateB64 != null && regId != -1) {
             val identityPrivateBytes = Base64.decode(identityPrivateB64, Base64.NO_WRAP)
             val identityPrivateKey = Curve.decodePrivatePoint(identityPrivateBytes)
-            val identityPublicB64 = prefs.getString("${localUserId}_identity_public", "")!!
+            val identityPublicB64 = secureStore.getString("${localUserId}_identity_public", "")!!
             val identityPublicKey = IdentityKey(
                 Curve.decodePoint(Base64.decode(identityPublicB64, Base64.NO_WRAP), 0)
             )
@@ -46,23 +46,25 @@ class MessageCryptoManager(
             registrationId = regId
             Log.d(TAG, "✅ Loaded saved Identity Keys for $localUserId")
         } else {
-            // Fallback для тестов
+            // Fallback: ключей нет (первый запуск / Keystore утерян) — генерируем.
+            // ВАЖНО: это состояние «нет ключей», LoginActivity запустит полную
+            // генерацию + загрузку через generateAndUploadKeys().
             identityKeyPair = generateIdentityKeyPair()
             registrationId = KeyHelper.generateRegistrationId(false)
-            Log.w(TAG, "⚠️ Generated NEW keys for $localUserId")
+            Log.w(TAG, "⚠️ No stored keys for $localUserId — generated temporary pair")
 
-            prefs.edit()
-                .putString("${localUserId}_identity_private", Base64.encodeToString(identityKeyPair.privateKey.serialize(), Base64.NO_WRAP))
-                .putString("${localUserId}_identity_public", Base64.encodeToString(identityKeyPair.publicKey.serialize(), Base64.NO_WRAP))
-                .putInt("${localUserId}_registration_id", registrationId)
-                .apply()
+            secureStore.putString("${localUserId}_identity_private",
+                Base64.encodeToString(identityKeyPair.privateKey.serialize(), Base64.NO_WRAP))
+            secureStore.putString("${localUserId}_identity_public",
+                Base64.encodeToString(identityKeyPair.publicKey.serialize(), Base64.NO_WRAP))
+            secureStore.putInt("${localUserId}_registration_id", registrationId)
         }
 
-        // 2. Создаем Persistent Store
+        // 2. Persistent Store
         store = PersistentSignalProtocolStore(identityKeyPair, registrationId, dao)
 
-        // === Загружаем SignedPreKeyRecord ===
-        val signedPreKeyRecordB64 = prefs.getString("${localUserId}_signed_prekey_record", null)
+        // === SignedPreKeyRecord ===
+        val signedPreKeyRecordB64 = secureStore.getString("${localUserId}_signed_prekey_record", null)
         if (signedPreKeyRecordB64 != null) {
             try {
                 val record = SignedPreKeyRecord(Base64.decode(signedPreKeyRecordB64, Base64.NO_WRAP))
@@ -73,8 +75,8 @@ class MessageCryptoManager(
             }
         }
 
-        // === Загружаем One-Time PreKeys ===
-        val otkpJson = prefs.getString("${localUserId}_one_time_keys", null)
+        // === One-Time PreKeys ===
+        val otkpJson = secureStore.getString("${localUserId}_one_time_keys", null)
         if (otkpJson != null) {
             try {
                 val jsonArray = org.json.JSONArray(otkpJson)
@@ -97,12 +99,11 @@ class MessageCryptoManager(
                 }
 
                 Log.d(TAG, "✅ Restored $loadedCount One-Time PreKeys to Room")
-
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Failed to restore One-Time PreKeys", e)
             }
         } else {
-            Log.w(TAG, "⚠️ No One-Time PreKeys found in SharedPreferences for $localUserId")
+            Log.w(TAG, "⚠️ No One-Time PreKeys found for $localUserId")
         }
     }
 
@@ -119,15 +120,22 @@ class MessageCryptoManager(
             val address = SignalProtocolAddress(remoteUserId, localDeviceId)
 
             val identityKey = IdentityKey(Base64.decode(bundle.identityKey, Base64.NO_WRAP), 0)
-            val preKeyPublic = Curve.decodePoint(Base64.decode(bundle.oneTimeKeys.first().publicKey, Base64.NO_WRAP), 0)
             val signedPreKeyPublic = Curve.decodePoint(Base64.decode(bundle.signedPreKeyPublic, Base64.NO_WRAP), 0)
             val signedPreKeySig = Base64.decode(bundle.signedPreKeySig, Base64.NO_WRAP)
+
+            // ✅ Сервер отдаёт 0 или 1 one-time prekey (одноразовые).
+            // Бандл без OTK — валидный: X3DH используется только signed prekey.
+            val hasOneTimeKey = bundle.oneTimeKeys.isNotEmpty()
+            val oneTimeKeyId = if (hasOneTimeKey) bundle.oneTimeKeys.first().keyId else -1
+            val oneTimeKeyPublic = if (hasOneTimeKey)
+                Curve.decodePoint(Base64.decode(bundle.oneTimeKeys.first().publicKey, Base64.NO_WRAP), 0)
+            else null
 
             val preKeyBundle = PreKeyBundle(
                 bundle.registrationId,
                 localDeviceId,
-                bundle.oneTimeKeys.first().keyId,
-                preKeyPublic,
+                oneTimeKeyId,
+                oneTimeKeyPublic,   // null = серверу нечего отдать, сессия строится без OTK
                 bundle.signedPreKeyId,
                 signedPreKeyPublic,
                 signedPreKeySig,
@@ -137,32 +145,19 @@ class MessageCryptoManager(
             try {
                 val sessionBuilder = SessionBuilder(store, address)
                 sessionBuilder.process(preKeyBundle)
-                Log.d(TAG, "✅ Session initialized successfully for $remoteUserId")
+                Log.d(TAG, "✅ Session initialized for $remoteUserId (OTK used: $hasOneTimeKey)")
 
             } catch (e: UntrustedIdentityException) {
                 Log.w(TAG, "⚠️ Untrusted identity for $remoteUserId. Updating identity key and retrying...")
-
                 try {
-                    // 1. Берем новый ключ из пришедшего бандла
-                    val newIdentityKey = preKeyBundle.identityKey
-
-                    // 2. Явно сохраняем его в хранилище как доверенный
-                    val address = SignalProtocolAddress(remoteUserId, 1)
-                    store.saveIdentity(address, newIdentityKey)
-
+                    store.saveIdentity(address, preKeyBundle.identityKey)
                     Log.d(TAG, "✅ New identity key saved. Retrying session initialization...")
-
-                    // 3. Пробуем создать сессию еще раз с новым ключом
-                    val sessionBuilder = SessionBuilder(store, address)
-                    sessionBuilder.process(preKeyBundle)
-
+                    SessionBuilder(store, address).process(preKeyBundle)
                 } catch (retryException: Exception) {
-                    Log.e(TAG, "❌ Failed to initialize session even after updating identity key", retryException)
+                    Log.e(TAG, "❌ Session init failed even after identity update", retryException)
                     throw retryException
                 }
             }
-
-            Log.d(TAG, "✅ Session initialized successfully for $remoteUserId")
 
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to initialize session", e)
@@ -176,9 +171,7 @@ class MessageCryptoManager(
             val address = SignalProtocolAddress(remoteUserId, localDeviceId)
             val sessionCipher = SessionCipher(store, address)
 
-            // ✅ Сериализуем MessageContent в JSON перед шифрованием
             val jsonContent = content.toJson()
-            Log.d(TAG, "📝 Content to encrypt: $jsonContent")
 
             val ciphertext = sessionCipher.encrypt(jsonContent.toByteArray(StandardCharsets.UTF_8))
 
@@ -196,15 +189,11 @@ class MessageCryptoManager(
         }
     }
 
-    /**
-     * 3. Расшифровка входящего сообщения с АВТОМАТИЧЕСКИМ принятием нового ключа
-     */
     fun decryptMessage(payload: EncryptedPayload, senderUserId: String): MessageContent {
         Log.d(TAG, "🔓 Decrypting from $senderUserId, type=${payload.type}")
 
-        // ✅ Добавляем проверку на type=0
         if (payload.type == 0) {
-            Log.e(TAG, "❌ Received payload with type=0! This means the message was not properly encrypted before sending.")
+            Log.e(TAG, "❌ Received payload with type=0! Message was not properly encrypted.")
             throw IllegalArgumentException("Invalid ciphertext type: 0. Message was not encrypted.")
         }
 
@@ -230,25 +219,20 @@ class MessageCryptoManager(
             }
             return MessageContent.fromJson(decryptedText)
         } catch (e: UntrustedIdentityException) {
-            // 🔥 КЛЮЧЕВОЙ МОМЕНТ: Ключ собеседника изменился!
             Log.w(TAG, "⚠️ Untrusted identity for $senderUserId. Auto-trusting new identity key and retrying...")
             try {
                 if (payload.type == CiphertextMessage.PREKEY_TYPE) {
                     val message = PreKeySignalMessage(ciphertextBytes)
                     val newIdentityKey = message.identityKey
 
-                    // 1. Сохраняем новый ключ как доверенный
                     saveIdentityKey(senderUserId, newIdentityKey)
                     Log.d(TAG, "✅ New identity key saved for $senderUserId. Retrying decrypt...")
 
-                    // 2. Повторяем попытку расшифровки с новым доверенным ключом
                     val result = sessionCipher.decrypt(message)
                     val decryptedText = String(result, StandardCharsets.UTF_8)
-                    Log.d(TAG, "  → Decrypted ${result.size} bytes after trust update")
                     return MessageContent.fromJson(decryptedText)
                 } else {
-                    // Если это обычное сообщение, а ключ не доверен, это требует перезапроса ключей с сервера
-                    Log.e(TAG, "❌ Regular message received with untrusted identity. Re-initialization required.")
+                    Log.e(TAG, "❌ Regular message with untrusted identity. Re-init required.")
                     throw Exception("Decryption failed: Untrusted identity for regular message.")
                 }
             } catch (retryException: Exception) {
@@ -261,9 +245,6 @@ class MessageCryptoManager(
         }
     }
 
-    /**
-     * Сохраняет Identity Key контакта как доверенный
-     */
     fun saveIdentityKey(remoteUserId: String, identityKey: org.signal.libsignal.protocol.IdentityKey) {
         val address = SignalProtocolAddress(remoteUserId, localDeviceId)
         store.saveIdentity(address, identityKey)

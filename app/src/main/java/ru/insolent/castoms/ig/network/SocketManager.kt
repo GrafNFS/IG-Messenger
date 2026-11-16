@@ -1,10 +1,17 @@
 package ru.insolent.castoms.ig.network
 
+import android.content.Context
+import ru.insolent.castoms.ig.crypto.CryptoManager
 import ru.insolent.castoms.ig.crypto.EncryptedPayload
+import ru.insolent.castoms.ig.utils.SessionManager
+import ru.insolent.castoms.ig.workers.PreKeyRefillWorker
 import android.util.Log
 import io.socket.client.IO
 import io.socket.client.Socket
-import io.socket.emitter.Emitter
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.net.URISyntaxException
 
@@ -14,10 +21,13 @@ object SocketManager {
     private val TAG = "SocketManager"
     private const val SERVER_URL = "https://messenger.insolent-castoms.ru"
 
+    private lateinit var appContext: Context
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     // Слушатель для входящих сообщений
     var onMessageReceived: ((from: String, payload: EncryptedPayload, messageId: String, timestamp: Long) -> Unit)? = null
 
-    // ✅ НОВЫЙ: Слушатель для подтверждения прочтения (две галочки)
+    // Слушатель для подтверждения прочтения (две галочки)
     var onMessageRead: ((messageId: String, readBy: String) -> Unit)? = null
     var onMessageDelivered: ((messageId: String, deliveredBy: String) -> Unit)? = null
     var onUserStatusChanged: ((userId: String, isOnline: Boolean) -> Unit)? = null
@@ -25,20 +35,38 @@ object SocketManager {
     // Слушатель действий (редактирование/удаление)
     var onMessageAction: ((from: String, payload: EncryptedPayload, targetMessageId: String?) -> Unit)? = null
 
-
-
-
-    // ✅ НОВЫЙ: Слушатель для оффлайн-доставки (можно использовать для лога)
+    // Слушатель для оффлайн-доставки
     var onOfflineMessageReceived: ((count: Int) -> Unit)? = null
+
+    /**
+     * Инициализация контекстом приложения. Вызывать ОДИН РАЗ до connect().
+     */
+    fun init(context: Context) {
+        appContext = context.applicationContext
+    }
 
     fun connect(userId: String) {
         if (socket?.connected() == true) return
+
+        if (!::appContext.isInitialized) {
+            Log.e(TAG, "❌ SocketManager.init(context) not called before connect()!")
+            return
+        }
+
+        // ✅ Токен обязателен: сервер отклоняет handshake без валидного JWT
+        val token = SessionManager(appContext).getToken()
+        if (token.isNullOrEmpty()) {
+            Log.e(TAG, "❌ Cannot connect: no auth token. Login first.")
+            return
+        }
 
         try {
             val options = IO.Options().apply {
                 transports = arrayOf("websocket")
                 reconnection = true
-                reconnectionAttempts = 5
+                reconnectionAttempts = 10
+                // ✅ Аутентификация сокета — сервер проверяет JWT на этапе handshake
+                auth = mapOf("token" to token)
             }
 
             socket = IO.socket(SERVER_URL, options)
@@ -46,13 +74,23 @@ object SocketManager {
 
             socket?.on(Socket.EVENT_CONNECT) {
                 Log.d(TAG, "✅ Connected")
-                val data = JSONObject().put("userId", userId)
-                socket?.emit("join_room", data)
+                // join_room больше не принимает userId — личность сервер берёт из токена
+                socket?.emit("join_room", JSONObject())
+                // Проверяем/пополняем запас one-time prekeys
+                triggerPreKeyMaintenance(userId)
             }
 
             // Обработка ошибок подключения
             socket?.on(Socket.EVENT_CONNECT_ERROR) { args ->
-                Log.e(TAG, "❌ Connection error: ${args.joinToString()}")
+                val errorMsg = args.joinToString()
+                Log.e(TAG, "❌ Connection error: $errorMsg")
+
+                // "unauthorized" — токен невалиден/протух. Реконнект бессмыслен,
+                // он сам не починится — рвём сокет, чтобы не гонять попытки.
+                if (errorMsg.contains("unauthorized", ignoreCase = true)) {
+                    Log.w(TAG, "⚠️ Socket unauthorized — token invalid or expired. Disconnecting.")
+                    socket?.disconnect()
+                }
             }
 
             // 📥 При входящем сообщении
@@ -61,21 +99,17 @@ object SocketManager {
                 val from = data.getString("from")
                 val payloadJson = data.getJSONObject("payload")
 
-                // ✅ messageId и timestamp теперь на верхнем уровне
                 val messageId = data.optString("messageId", "")
                 val timestamp = data.optLong("timestamp", System.currentTimeMillis())
                 val isOffline = data.optBoolean("isOffline", false)
 
-                Log.d(TAG, " SOCKET: Received message from $from, id=$messageId")
+                Log.d(TAG, "📨 Received from $from, msgId: $messageId, offline: $isOffline")
 
                 val encrypted = EncryptedPayload(
                     type = payloadJson.getInt("type"),
                     data = payloadJson.getString("data")
                 )
 
-                Log.d(TAG, "📨 Received from $from, msgId: $messageId, offline: $isOffline")
-
-                // Передаём все данные в UI
                 onMessageReceived?.invoke(from, encrypted, messageId, timestamp)
             }
 
@@ -84,11 +118,10 @@ object SocketManager {
                 val messageId = json.getString("messageId")
                 val readBy = json.getString("deliveredBy")
 
-                Log.d(TAG, "✅ Message $messageId delivery by $readBy")
+                Log.d(TAG, "✅ Message $messageId delivered by $readBy")
                 onMessageDelivered?.invoke(messageId, readBy)
             }
 
-            // ✅ Обработка подтверждения прочтения (для двух галочек)
             socket?.on("message_read") { args ->
                 val json = JSONObject(args[0].toString())
                 val messageId = json.getString("messageId")
@@ -98,7 +131,6 @@ object SocketManager {
                 onMessageRead?.invoke(messageId, readBy)
             }
 
-            // ✅ Обработка пакетной доставки оффлайн-сообщений
             socket?.on("offline_messages_batch") { args ->
                 val json = JSONObject(args[0].toString())
                 val count = json.optInt("count", 0)
@@ -129,7 +161,7 @@ object SocketManager {
                 val json = JSONObject(args[0].toString())
                 val from = json.getString("from")
                 val payloadJson = json.getJSONObject("payload")
-                val targetId = json.optString("messageId", null) // ID целевого сообщения
+                val targetId = json.optString("messageId", null)
 
                 val payload = EncryptedPayload(
                     type = payloadJson.getInt("type"),
@@ -145,7 +177,18 @@ object SocketManager {
         }
     }
 
-    // Метод отправки действия
+    /** Ротация OTK при каждом подключении + страховочный периодический воркер */
+    private fun triggerPreKeyMaintenance(userId: String) {
+        scope.launch {
+            try {
+                CryptoManager(appContext).refillOneTimePreKeysIfNeeded(userId)
+            } catch (e: Exception) {
+                Log.e(TAG, "PreKey maintenance failed", e)
+            }
+        }
+        PreKeyRefillWorker.schedulePeriodic(appContext)
+    }
+
     fun sendMessageAction(chatId: String, payload: EncryptedPayload, targetMessageId: String?): Boolean {
         if (socket?.connected() != true) return false
         val data = JSONObject().apply {
@@ -160,15 +203,13 @@ object SocketManager {
         return true
     }
 
-    // 📤 Отправка зашифрованного сообщения
     fun sendEncryptedMessage(targetUserId: String, payload: EncryptedPayload, messageId: String, typeMsg: String): Boolean {
         if (socket?.connected() != true) return false
 
-        // ✅ messageId на верхнем уровне, как ждёт сервер
         val data = JSONObject().apply {
             put("to", targetUserId)
             put("typeMsg", typeMsg)
-            put("messageId", messageId)  // ✅ Здесь, а не внутри payload!
+            put("messageId", messageId)
             put("payload", JSONObject().apply {
                 put("type", payload.type)
                 put("data", payload.data)
@@ -179,10 +220,9 @@ object SocketManager {
         return true
     }
 
-    // ✅ 1. Подтверждение ДОСТАВКИ на устройство (2 серые галочки)
     fun sendDeliveryReceipt(chatId: String, messageId: String): Boolean {
         if (socket?.connected() != true) {
-            Log.w("SocketManager", "Cannot send delivery receipt: socket disconnected")
+            Log.w(TAG, "Cannot send delivery receipt: socket disconnected")
             return false
         }
 
@@ -192,11 +232,10 @@ object SocketManager {
             put("timestamp", System.currentTimeMillis())
         }
         socket?.emit("delivery_receipt", data)
-        Log.d("SocketManager", "📤 Emitted delivery_receipt for $messageId")
+        Log.d(TAG, "📤 Emitted delivery_receipt for $messageId")
         return true
     }
 
-    // ✅ НОВЫЙ: Отправка подтверждения прочтения (для двух галочек)
     fun sendReadReceipt(chatId: String, messageId: String): Boolean {
         if (socket?.connected() != true) return false
 
@@ -210,32 +249,19 @@ object SocketManager {
         return true
     }
 
-    // ✅ Метод отправки "начал печатать"
     fun sendTypingStart(chatId: String): Boolean {
         if (socket?.connected() != true) return false
-
-        val data = JSONObject().apply {
-            put("chatId", chatId)
-        }
-        socket?.emit("typing_start", data)
+        socket?.emit("typing_start", JSONObject().put("chatId", chatId))
         return true
     }
 
-    // ✅ Метод отправки "перестал печатать"
     fun sendTypingStop(chatId: String): Boolean {
         if (socket?.connected() != true) return false
-
-        val data = JSONObject().apply {
-            put("chatId", chatId)
-        }
-        socket?.emit("typing_stop", data)
+        socket?.emit("typing_stop", JSONObject().put("chatId", chatId))
         return true
     }
 
-    // ✅ ИСПРАВЛЕНО: Теперь возвращает true когда подключено
-    fun isConnected(): Boolean {
-        return socket?.connected() == true
-    }
+    fun isConnected(): Boolean = socket?.connected() == true
 
     fun disconnect() {
         socket?.disconnect()

@@ -174,6 +174,26 @@ class SplashActivity : AppCompatActivity() {
         }
         val deviceId = session.getDeviceId()
 
+        // ✅ НОВОЕ: проверяем, что токен реально валиден
+        SocketManager.init(this)
+        lifecycleScope.launch {
+            try {
+                val profileResp = NetworkClient.apiService.getMyProfile()
+                if (!profileResp.isSuccessful) {
+                    Log.w("Splash", "Token invalid (${profileResp.code()}), logging out")
+                    session.clearAll()
+                    navigateToLogin()
+                    return@launch
+                }
+            } catch (e: Exception) {
+                // Сети нет — не выгоняем пользователя, идём дальше как раньше
+                Log.e("Splash", "Profile check failed (offline?)", e)
+            }
+            proceedToMain(session, userId, deviceId)
+        }
+    }
+
+    private fun proceedToMain(session: SessionManager, userId: String, deviceId: String) {
         com.google.firebase.messaging.FirebaseMessaging.getInstance().token
             .addOnCompleteListener { task ->
                 if (task.isSuccessful) {

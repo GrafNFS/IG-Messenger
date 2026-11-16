@@ -2,7 +2,7 @@ package ru.insolent.castoms.ig.network
 
 import android.content.Context
 import android.util.Log
-import com.google.android.datatransport.BuildConfig
+//import ru.insolent.castoms.ig.BuildConfig
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -18,11 +18,11 @@ object NetworkClient {
     private lateinit var appContext: Context
 
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
-        if (BuildConfig.DEBUG) {
+        //if (BuildConfig.DEBUG) {
             level = HttpLoggingInterceptor.Level.BODY
-        } else {
+        /*} else {
             level = HttpLoggingInterceptor.Level.NONE
-        }
+        }*/
     }
 
     private val authInterceptor = Interceptor { chain ->

@@ -92,6 +92,7 @@ class LoginActivity : AppCompatActivity() {
                     NetworkClient.init(this@LoginActivity)
 
                     // 3. Подключаем сокет
+                    SocketManager.init(this@LoginActivity)
                     SocketManager.connect(authResponse.user.id)
 
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

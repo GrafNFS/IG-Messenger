@@ -88,6 +88,12 @@ interface ApiService {
 
     @DELETE("api/devices/{deviceId}")
     suspend fun unregisterDevice(@Path("deviceId") deviceId: String): Response<Any>
+
+    @GET("api/keys/count/remaining")
+    suspend fun getRemainingPreKeys(): Response<RemainingKeysResponse>
+
+    @POST("api/keys/one-time")
+    suspend fun uploadOneTimeKeys(@Body request: OneTimeKeysUploadRequest): Response<Any>
 }
 
 // === МОДЕЛИ ДАННЫХ ===
@@ -191,7 +197,8 @@ data class OneTimeKey(
 
 data class KeysUploadResponse(
     val success: Boolean,
-    val message: String
+    val message: String? = null,
+    val remaining: Int? = null
 )
 
 data class KeysBundle(
@@ -214,3 +221,7 @@ data class MediaUploadResponse(
     val size: Long,
     val uploadedAt: Long
 )
+
+data class RemainingKeysResponse(val remaining: Int)
+
+data class OneTimeKeysUploadRequest(val oneTimeKeys: List<OneTimeKey>)
