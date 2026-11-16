@@ -38,6 +38,9 @@ object SocketManager {
     // Слушатель для оффлайн-доставки
     var onOfflineMessageReceived: ((count: Int) -> Unit)? = null
 
+    // Срабатывает при каждом успешном (пере)подключении сокета
+    var onConnected: (() -> Unit)? = null
+
     /**
      * Инициализация контекстом приложения. Вызывать ОДИН РАЗ до connect().
      */
@@ -78,6 +81,8 @@ object SocketManager {
                 socket?.emit("join_room", JSONObject())
                 // Проверяем/пополняем запас one-time prekeys
                 triggerPreKeyMaintenance(userId)
+                // Уведомляем подписчиков (сервис запускает глобальный догон сообщений)
+                onConnected?.invoke()
             }
 
             // Обработка ошибок подключения

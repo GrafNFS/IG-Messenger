@@ -94,6 +94,9 @@ interface ApiService {
 
     @POST("api/keys/one-time")
     suspend fun uploadOneTimeKeys(@Body request: OneTimeKeysUploadRequest): Response<Any>
+
+    @GET("api/chats")
+    suspend fun getMyChats(): Response<List<String>>
 }
 
 // === МОДЕЛИ ДАННЫХ ===

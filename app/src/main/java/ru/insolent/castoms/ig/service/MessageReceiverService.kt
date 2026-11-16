@@ -13,7 +13,6 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import ru.insolent.castoms.ig.ChatActivity
-import ru.insolent.castoms.ig.MainActivity
 import ru.insolent.castoms.ig.R
 import ru.insolent.castoms.ig.crypto.EncryptedPayload
 import ru.insolent.castoms.ig.crypto.MessageCryptoManager
@@ -21,8 +20,8 @@ import ru.insolent.castoms.ig.database.MessageStatus
 import ru.insolent.castoms.ig.network.NetworkClient
 import ru.insolent.castoms.ig.network.SocketManager
 import ru.insolent.castoms.ig.utils.MessageManager
+import ru.insolent.castoms.ig.utils.MessageSyncer
 import ru.insolent.castoms.ig.utils.SessionManager
-import java.io.File
 
 class MessageReceiverService : Service() {
 
@@ -34,9 +33,13 @@ class MessageReceiverService : Service() {
     private lateinit var messageManager: MessageManager
     private lateinit var sessionManager: SessionManager
 
+    private var myId: String = ""
+
     private val downloadingFiles = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
-    // 🌟 1. Добавляем Binder для связи службы с жизненным циклом приложения
+    // Защита от параллельных запусков глобальной синхронизации
+    private var globalSyncJob: Job? = null
+
     private val binder = LocalBinder()
 
     inner class LocalBinder : Binder() {
@@ -51,16 +54,20 @@ class MessageReceiverService : Service() {
     override fun onCreate() {
         super.onCreate()
         sessionManager = SessionManager(applicationContext)
-        val myId = sessionManager.getUserId() ?: ""
+        myId = sessionManager.getUserId() ?: ""
         cryptoManager = MessageCryptoManager(myId, applicationContext)
         messageManager = MessageManager(applicationContext)
 
         Log.d(TAG, "Service created, setting up global socket listeners...")
 
-        /*val response = NetworkClient.apiService.getChatHistory(contactId, myId)
-        if (response.isSuccessful && response.body() != null) {
+        // ✅ Глобальный догон ВСЕХ чатов при старте приложения
+        syncAllChats()
 
-        }*/
+        // ✅ И повторный догон при каждом (пере)подключении сокета
+        SocketManager.onConnected = {
+            Log.d(TAG, "Socket connected — running global sync")
+            syncAllChats()
+        }
 
         // ✅ 1. Слушаем входящие сообщения
         SocketManager.onMessageReceived = { from, payload, messageId, timestamp ->
@@ -105,13 +112,83 @@ class MessageReceiverService : Service() {
         }
     }
 
+    /**
+     * 🌟 ГЛОБАЛЬНАЯ СИНХРОНИЗАЦИЯ: подтягивает недоставленные сообщения
+     * (в т.ч. с вложениями, о которых был только «намёк» в пуше) для ВСЕХ чатов.
+     * Источник списка чатов — сервер (GET /api/chats), а не локальная БД:
+     * это работает и после переустановки приложения.
+     */
+    private fun syncAllChats() {
+        if (myId.isEmpty()) return
+        if (globalSyncJob?.isActive == true) {
+            Log.d(TAG, "Global sync already running, skip")
+            return
+        }
+
+        globalSyncJob = serviceScope.launch {
+            try {
+                val chatsResp = NetworkClient.apiService.getMyChats()
+                if (!chatsResp.isSuccessful || chatsResp.body() == null) {
+                    Log.w(TAG, "getMyChats failed: ${chatsResp.code()}")
+                    return@launch
+                }
+
+                val chatIds = chatsResp.body()!!.filter { it != myId }
+                if (chatIds.isEmpty()) return@launch
+
+                Log.i(TAG, "🔄 Global sync started for ${chatIds.size} chats")
+
+                for (chatId in chatIds) {
+                    try {
+                        val newCount = MessageSyncer.syncChat(
+                            context = applicationContext,
+                            cryptoManager = cryptoManager,
+                            messageManager = messageManager,
+                            chatId = chatId,
+                            myId = myId,
+                            showNotification = true,
+                            onNewMessage = { messageId, from, content, messageType ->
+                                notifyIfChatClosed(messageId, from, content.text, messageType)
+                            },
+                            downloadingFiles = downloadingFiles
+                        )
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Sync failed for chat $chatId", e)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Global sync failed", e)
+            }
+        }
+    }
+
+    /** Уведомление только если этот чат сейчас НЕ открыт на экране */
+    private suspend fun notifyIfChatClosed(
+        messageId: String,
+        from: String,
+        text: String,
+        messageType: String
+    ) {
+        if (ChatActivity.currentOpenChatId == from) return
+
+        val contact = messageManager.getContactById(from)
+        val notificationText = when {
+            text.isNotEmpty() -> text
+            messageType == "audio" -> "🎙️ Голосовое сообщение"
+            messageType == "video" -> "🎥 Видео"
+            messageType == "image" -> "📷 Фото"
+            else -> "Новое сообщение"
+        }
+        showNewMessageNotification(messageId, contact, notificationText, from)
+    }
+
     private suspend fun handleIncomingMessage(from: String, payload: EncryptedPayload, messageId: String, timestamp: Long) {
         try {
             val messageContent = cryptoManager.decryptMessage(payload, from)
             val attachments = messageContent.attachments
 
             val messageType = when {
-                messageContent?.attachments?.any { it.mediaType.startsWith("audio") } == true -> "audio"
+                messageContent.attachments?.any { it.mediaType.startsWith("audio") } == true -> "audio"
                 messageContent.attachments?.any { it.mediaType == "image/gif" } == true -> "gif"
                 messageContent.attachments?.any { it.mediaType.startsWith("video") } == true -> "video"
                 !messageContent.attachments.isNullOrEmpty() -> "image"
@@ -119,10 +196,15 @@ class MessageReceiverService : Service() {
             }
 
             // Сохраняем в БД Room
-            messageManager.saveIncomingMessage(
-                chatId = from, senderId = from, content = messageContent.text,
-                timestamp = timestamp, messageId = messageId, messageType = messageType, attachments = attachments
-            )
+            try {
+                messageManager.saveIncomingMessage(
+                    chatId = from, senderId = from, content = messageContent.text,
+                    timestamp = timestamp, messageId = messageId, messageType = messageType, attachments = attachments
+                )
+            } catch (e: Exception) {
+                Log.d(TAG, "Duplicate message in DB, skip: $messageId")
+                return
+            }
 
             // Фоновое скачивание медиа файлов
             attachments?.forEach { attachment ->
@@ -150,17 +232,17 @@ class MessageReceiverService : Service() {
 
             SocketManager.sendDeliveryReceipt(from, messageId)
 
-            // Показываем обычное пуш-уведомление через NotificationManager, только если чат закрыт
+            // Показываем обычное пуш-уведомление, только если чат закрыт
             if (ChatActivity.currentOpenChatId != from) {
-                val contact = messageManager.getContactById(from)
-                val notificationText = when {
+                val text = when {
                     messageContent.text.isNotEmpty() -> messageContent.text
                     messageType == "audio" -> "🎙️ Голосовое сообщение"
                     messageType == "video" -> "🎥 Видео"
                     messageType == "image" -> "📷 Фото"
                     else -> "Новое сообщение"
                 }
-                showNewMessageNotification(messageId, contact, notificationText, from)
+                val contact = messageManager.getContactById(from)
+                showNewMessageNotification(messageId, contact, text, from)
             }
 
         } catch (e: org.signal.libsignal.protocol.DuplicateMessageException) {
@@ -212,5 +294,6 @@ class MessageReceiverService : Service() {
         SocketManager.onMessageDelivered = null
         SocketManager.onMessageRead = null
         SocketManager.onMessageAction = null
+        SocketManager.onConnected = null
     }
 }

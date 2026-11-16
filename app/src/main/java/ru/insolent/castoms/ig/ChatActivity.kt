@@ -946,74 +946,15 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
     private fun syncMessages() {
         lifecycleScope.launch {
             try {
-                val response = NetworkClient.apiService.getChatHistory(contactId, myId)
-                if (response.isSuccessful && response.body() != null) {
-                    val dtos = response.body()!!
-
-                    val messagesToSave = mutableListOf<MessageEntity>()
-
-                    for (dto in dtos) {
-                        val messageId = dto.id ?: continue
-                        val senderId = dto.senderId.takeIf { it.isNotBlank() } ?: continue
-                        //if (!dto.isIncoming) continue
-
-                        try {
-                            val payloadJson = Gson().toJson(dto.payload)
-                            val payload = Gson().fromJson(payloadJson, EncryptedPayload::class.java)
-                            val messageContent = cryptoManager.decryptMessage(payload, senderId)
-
-                            val attachments = messageContent.attachments
-
-                            val messageType = when {
-                                messageContent?.attachments?.any { it.mediaType.startsWith("audio") } == true -> "audio"
-                                messageContent.attachments?.any { it.mediaType == "image/gif" } == true -> "gif"
-                                messageContent.attachments?.any { it.mediaType.startsWith("video") } == true -> "video"
-                                !messageContent.attachments.isNullOrEmpty() -> "image"
-                                else -> "text"
-                            }
-
-                            // Сохраняем в БД Room
-                            messageManager.saveIncomingMessage(
-                                chatId = senderId, senderId = senderId, content = messageContent.text,
-                                timestamp = dto.timestamp, messageId = messageId, messageType = messageType, attachments = attachments
-                            )
-
-                            attachments?.forEach { attachment ->
-                                val fileId = attachment.fileId
-                                if (!downloadingFiles.add(fileId)) return@forEach
-
-                                lifecycleScope.launch {
-                                    try {
-                                        val localPath = messageManager.downloadAndDecryptMedia(
-                                            context = this@ChatActivity, fileId = fileId,
-                                            encryptedKeyBase64 = attachment.encryptedKey, mediaType = attachment.mediaType ?: "image/jpeg",
-                                            fileName = attachment.fileName ?: "file", messageId = messageId, expectedFileSize = attachment.fileSize ?: 0L,
-                                            onProgress = {}
-                                        )
-
-                                        if (localPath != null) {
-                                            messageManager.updateAttachmentLocalPath(messageId, fileId, localPath)
-                                            NetworkClient.apiService.deleteMedia(fileId)
-                                        }
-                                    } finally {
-                                        downloadingFiles.remove(fileId)
-                                    }
-                                }
-                            }
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Could not decrypt outgoing $messageId", e)
-                            null
-                        }
-                    }
-
-                    /*if (messagesToSave.isNotEmpty()) {
-                        messageManager.saveMessagesBatch(messagesToSave)
-                    }
-                    if (attachmentsToSave.isNotEmpty()) {
-                        messageManager.saveAttachmentsBatch(attachmentsToSave)
-                    }*/
-
-                }
+                MessageSyncer.syncChat(
+                    context = this@ChatActivity,
+                    cryptoManager = cryptoManager,
+                    messageManager = messageManager,
+                    chatId = contactId,
+                    myId = myId,
+                    showNotification = false,               // чат открыт — уведомления не нужны
+                    downloadingFiles = downloadingFiles     // reuse сет дедупликации Activity
+                )
             } catch (e: Exception) {
                 Log.e(TAG, "Sync failed", e)
             }
