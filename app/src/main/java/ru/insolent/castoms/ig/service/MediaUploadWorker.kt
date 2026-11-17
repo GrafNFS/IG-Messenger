@@ -8,15 +8,15 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.MultipartBody
-import okhttp3.RequestBody
 import ru.insolent.castoms.ig.crypto.EncryptedPayload
 import ru.insolent.castoms.ig.database.CryptoDatabase
 import ru.insolent.castoms.ig.database.MessageStatus
 import ru.insolent.castoms.ig.network.NetworkClient
 import ru.insolent.castoms.ig.network.SocketManager
 import ru.insolent.castoms.ig.utils.MessageManager
+import ru.insolent.castoms.ig.utils.ProgressRequestBody
 import java.io.File
 
 class MediaUploadWorker(
@@ -35,7 +35,6 @@ class MediaUploadWorker(
             Log.e("MediaUploadWorker", "❌ КРИТИЧЕСКАЯ ОШИБКА: contactId пришел null из инпут-даты")
             return Result.failure()
         }
-
         val typeMsg = inputData.getString("typeMsg") ?: run {
             Log.e("MediaUploadWorker", "❌ КРИТИЧЕСКАЯ ОШИБКА: typeMsg пришел null из инпут-даты")
             return Result.failure()
@@ -45,25 +44,19 @@ class MediaUploadWorker(
 
         val messageManager = MessageManager(applicationContext)
 
-        // 🌟 Даем небольшую паузу (200мс), чтобы тяжелый пакет данных
-        // гарантированно успел записаться в базу данных в ChatActivity перед чтением
         delay(200)
 
-        // 🌟 1. Проверяем получение Payload
         val encryptedPayloadJson = messageManager.getMessagePayload(messageId)
         if (encryptedPayloadJson == null) {
             Log.e("MediaUploadWorker", "❌ ОШИБКА СБОРКИ: encryptedPayload не найден в БД для messageId: $messageId")
             return Result.failure()
         }
-        Log.d("MediaUploadWorker", "✅ Зашифрованный payload успешно прочитан из БД")
 
-        // 🌟 2. Проверяем получение Вложений
         val attachments = messageManager.getAttachmentsForMessage(messageId)
         if (attachments.isEmpty()) {
             Log.e("MediaUploadWorker", "❌ ОШИБКА СБОРКИ: Вложения (attachments) НЕ найдены в БД для messageId: $messageId")
             return Result.failure()
         }
-        Log.d("MediaUploadWorker", "✅ Найдено вложений в БД: ${attachments.size}")
 
         val payloadObject = com.google.gson.Gson().fromJson(encryptedPayloadJson, EncryptedPayload::class.java)
         val tempFilesList = mutableListOf<File>()
@@ -80,19 +73,35 @@ class MediaUploadWorker(
                             Log.e("MediaUploadWorker", "❌ Файл не найден на диске: ${file.absolutePath} для fileId: $fileId")
                             return@async false
                         }
-                        Log.d("MediaUploadWorker", "📦 Файл найден. Размер: ${file.length()} байт. Начинаем uploadMedia...")
 
                         tempFilesList.add(file)
 
-                        val requestBody = RequestBody.create(
+                        // 🌟 ПРОГРЕСС ЗАГРУЗКИ: пишем % в Room → Flow → UI
+                        val progressBody = ProgressRequestBody(
+                            file,
                             "application/octet-stream".toMediaTypeOrNull(),
-                            file
+                        ) { percent ->
+                            runBlocking {
+                                try {
+                                    messageManager.updateAttachmentUploadProgress(messageId, fileId, percent)
+                                } catch (_: Exception) {}
+                            }
+                        }
+
+                        val part = okhttp3.MultipartBody.Part.createFormData(
+                            "file", "$fileId.enc", progressBody
                         )
-                        val part = MultipartBody.Part.createFormData("file", "$fileId.enc", requestBody)
 
                         try {
                             val response = NetworkClient.apiService.uploadMedia(fileId, part)
                             Log.d("MediaUploadWorker", "📡 Ответ сервера для $fileId: Code=${response.code()}, IsSuccessful=${response.isSuccessful}")
+                            if (response.isSuccessful) {
+                                runBlocking {
+                                    try {
+                                        messageManager.updateAttachmentUploadProgress(messageId, fileId, 100)
+                                    } catch (_: Exception) {}
+                                }
+                            }
                             response.isSuccessful
                         } catch (e: Exception) {
                             Log.e("MediaUploadWorker", "❌ Сетевая ошибка при отправке файла: $fileId", e)
@@ -139,10 +148,6 @@ class MediaUploadWorker(
     }
 
     private suspend fun updateMessageStatus(chatId: String, messageId: String, status: MessageStatus) {
-        // Вызовите ваш менеджер сообщений для обновления UI/БД
-        // Например: AppDatabase.getInstance(applicationContext).messageDao().updateStatus(...)
-        // Или через ваш синглтон messageManager:
-        //messageManager.updateStatus(chatId, messageId, status)
         dao.updateMessageStatus(chatId, messageId, status)
     }
 }

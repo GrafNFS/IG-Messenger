@@ -22,6 +22,7 @@ import android.widget.PopupMenu
 import android.widget.Toast
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -42,6 +43,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.insolent.castoms.ig.databinding.ActivityChatBinding
 import ru.insolent.castoms.ig.adapters.*
+import ru.insolent.castoms.ig.chat.ChatViewModel
 import ru.insolent.castoms.ig.crypto.*
 import ru.insolent.castoms.ig.database.*
 import ru.insolent.castoms.ig.database.AttachmentEntity
@@ -60,8 +62,7 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
     private lateinit var binding: ActivityChatBinding
     private var contactId: String = ""
     private var contactName: String = ""
-    private lateinit var cryptoManager: MessageCryptoManager
-    private lateinit var messageManager: MessageManager
+    private val viewModel: ChatViewModel by viewModels()
     private lateinit var messageAdapter: MessageAdapter
     companion object {
         var currentOpenChatId: String? = null
@@ -194,10 +195,9 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
         binding.toolbar.setNavigationOnClickListener { finish() }
 
-        val sessionManager = SessionManager(this)
-        myId = sessionManager.getUserId() ?: ""
-        cryptoManager = MessageCryptoManager(myId, this@ChatActivity)
-        messageManager = MessageManager(this)
+        myId = viewModel.myId
+        viewModel.setup(contactId, contactName ?: contactId)
+        viewModel.bindSocket()
         messageAdapter = MessageAdapter()
 
         messageAdapter.setQuoteClickListener { replyToMessageId ->
@@ -218,11 +218,7 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
             override fun onRetryClick(attachment: AttachmentEntity) {
                 lifecycleScope.launch(Dispatchers.IO) {
                     // 1. Возвращаем прогресс в БД на 0%, чтобы скрылся крестик/ошибка и пополз лоадер
-                    messageManager.updateAttachmentDownloadProgress(
-                        messageId = attachment.messageId,
-                        fileId = attachment.fileId,
-                        progress = 0
-                    )
+                    viewModel.resetAttachmentProgress(attachment.messageId)
 
                     // 2. Обновляем UI в адаптере, чтобы анимация сброса применилась мгновенно
                     lifecycleScope.launch(Dispatchers.Main) {
@@ -380,19 +376,7 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
             true
         }
 
-        observeMessages()
-
-        SocketManager.onUserStatusChanged = { userId, isOnline ->
-            if (userId == contactId) {
-                runOnUiThread { updateOnlineStatus(isOnline) }
-            }
-        }
-
-        SocketManager.onTypingIndicator = { userId, chatId, isTyping ->
-            if (userId == contactId && chatId == myId) {
-                runOnUiThread { updateTypingIndicator(isTyping) }
-            }
-        }
+        //observeMessages()
 
         checkContactOnlineStatus()
 
@@ -402,88 +386,47 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
         binding.tvStatus.setTextColor(getColor(R.color.text_secondary_light))
 
         binding.btnSend.setOnClickListener {
-            val text = binding.etMessageInput.text.toString().trim()
-            lifecycleScope.launch {
-                try {
-                    if (editingMessageId != null) {
-                        val actionContent = MessageContent(
-                            text = text,
-                            action = "edit",
-                            targetMessageId = editingMessageId
-                        )
-                        val encrypted = cryptoManager.encryptMessage(actionContent, contactId)
-                        SocketManager.sendMessageAction(contactId, encrypted, editingMessageId)
-                        messageManager.updateMessageText(editingMessageId!!, text)
-                        cancelEditing()
-                    }
-                    // ✅ НОВОЕ: Если есть выбранные медиа, отправляем их
-                    else if (selectedMedia.isNotEmpty()) {
-                        val mediaToSend = selectedMedia.toList()
+            if (isAudioRecording) return@setOnClickListener
 
+            if (editingMessageId !== null) {
+                val messageText = binding.etMessageInput.text.toString().trim()
+                if (messageText.isNotEmpty()) {
+                    lifecycleScope.launch {
+                        if (viewModel.sendEdit(editingMessageId, messageText)) {
+                            binding.etMessageInput.setText("")
+                            cancelEditing()
+                        }
+                    }
+                }
+            } else if (selectedMedia.isNotEmpty()) {
+                lifecycleScope.launch {
+                    if (viewModel.sendMedia(ArrayList(selectedMedia), binding.etMessageInput.text.toString().trim())) {
                         selectedMedia.clear()
                         updateMediaPreview()
                         binding.etMessageInput.text.clear()
                         hideQuotePanel()
-
-                        // Отправляем ВСЕ медиа как ОДНО сообщение
-                        processSelectedMedia(mediaToSend, text)
                     }
-                    // ✅ СТАРОЕ: Если только текст
-                    else if (text.isNotEmpty() && !selectedMedia.isNotEmpty()) {
-                        val messageContent = MessageContent(
-                            text = text,
-                            replyToMessageId = replyToMessageId,
-                            replyToSenderName = replyToSenderName,
-                            replyToContent = replyToContent
-                        )
-                        val encrypted = cryptoManager.encryptMessage(messageContent, contactId)
-
-                        val messageId = messageManager.saveOutgoingMessage(
-                            chatId = contactId,
-                            content = text,
-                            myId = myId,
-                            encryptedPayload = encrypted,
-                            status = MessageStatus.SENDING,
-                            replyToMessageId = replyToMessageId,
-                            replyToSenderName = replyToSenderName,
-                            replyToContent = replyToContent
-                        )
-
-                        messageAdapter.addMessage(
-                            messageId = messageId,
-                            text = text,
-                            isMe = true,
-                            time = getCurrentTime(),
-                            status = MessageStatus.SENDING,
-                            messageType = "text"
-                        )
-                        binding.etMessageInput.text.clear()
-                        binding.rvMessages.scrollToPosition(messageAdapter.itemCount - 1)
-
-                        val sent = SocketManager.sendEncryptedMessage(contactId, encrypted, messageId, "text")
-
-                        if (sent) {
-                            messageManager.updateStatus(contactId, messageId, MessageStatus.SENT)
-                            messageAdapter.updateMessageStatus(messageId, MessageStatus.SENT)
-                        } else {
-                            messageManager.updateStatus(contactId, messageId, MessageStatus.FAILED)
-                            Toast.makeText(this@ChatActivity, "Failed to send", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                val messageText = binding.etMessageInput.text.toString().trim()
+                if (messageText.isNotEmpty()) {
+                    lifecycleScope.launch {
+                        if (viewModel.sendText(messageText, replyToMessageId, replyToSenderName, replyToContent)) {
+                            binding.etMessageInput.setText("")
+                            hideQuotePanel()
                         }
-                        hideQuotePanel()
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Encrypt/send error", e)
-                    Toast.makeText(this@ChatActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
         }
 
         lifecycleScope.launch {
-            loadContactKeysAndInitSession()
+            viewModel.initSession()
             delay(300)
-            syncMessages()
-            sendReadReceiptsForUnreadMessages()
+            viewModel.syncNow()
+            viewModel.markRead()
         }
+        observeViewModel()
 
         // Инициализация адаптера превью
         mediaPreviewAdapter = MediaPreviewAdapter { position ->
@@ -601,90 +544,21 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
             }
         }
 
-        val file = audioRecordFile
-        // 🌟 ОТПРАВЛЯЕМ ФАЙЛ ТОЛЬКО ЕСЛИ ОН ВАЛИДНЫЙ (длился дольше 700мс)
-        if (shouldSend && isRecordValid && file != null && file.exists() && file.length() > 0) {
-            lifecycleScope.launch(Dispatchers.IO) {
-                processAudioAttachment(file)
+        if (shouldSend) {
+            val file = audioRecordFile
+            lifecycleScope.launch {
+                if (file != null && file.exists() && file.length() > 0) {
+                    viewModel.sendVoiceMessage(file)
+                } else {
+                    file?.delete()
+                }
             }
         } else {
-            Log.w(TAG, "🗑️ Файл записи удален (короткий клик, отмена свайпом или ошибка кодека)")
-            if (file?.exists() == true) file.delete()
+            audioRecordFile?.delete()
         }
         isRecordLocked = false
     }
 
-    // 🌟 3. Шифрование и отправка в WorkManager
-    private suspend fun processAudioAttachment(audioFile: File) = withContext(Dispatchers.IO) {
-        val messageId = UUID.randomUUID().toString()
-        val fileId = UUID.randomUUID().toString()
-        val encryptedFile = File(cacheDir, "$fileId.enc")
-        val localCacheFile = File(cacheDir, "$fileId.3gp")
-
-        try {
-            Log.d(TAG, "🔒 Начинаем шифрование аудиосообщения...")
-            audioFile.renameTo(localCacheFile)
-
-            // AES Шифрование
-            val aesKey = MediaCrypto.generateAESKey()
-            MediaCrypto.encryptFile(localCacheFile, encryptedFile, aesKey)
-            Log.d(TAG, "✅ Файл зашифрован. Размер .enc: ${encryptedFile.length()} байт")
-
-            val fileSize = encryptedFile.length()
-            val aesKeyBase64 = Base64.encodeToString(MediaCrypto.keyToBytes(aesKey), Base64.NO_WRAP)
-
-            val attachments = listOf(
-                MediaAttachment(
-                    fileId = fileId,
-                    encryptedKey = aesKeyBase64,
-                    mediaType = "audio/3gpp",
-                    fileName = "voice.3gp",
-                    fileSize = fileSize,
-                    thumbnailBase64 = ""
-                )
-            )
-
-            val messageContent = MessageContent(text = "", attachments = attachments)
-            val encryptedPayload = cryptoManager.encryptMessage(messageContent, contactId)
-
-            val uiAttachments = listOf(
-                AttachmentEntity(
-                    messageId = messageId,
-                    fileId = fileId,
-                    encryptedKey = aesKeyBase64,
-                    mediaType = "audio/3gpp", // 🌟 3. ИСПРАВЛЕНИЕ
-                    fileName = "voice.3gp",    // 🌟 4. ИСПРАВЛЕНИЕ
-                    fileSize = fileSize,
-                    thumbnailBase64 = "",
-                    localFilePath = localCacheFile.absolutePath,
-                    downloadProgress = 0,
-                    uploadProgress = 0
-                )
-            )
-
-            // Сохраняем в БД
-            messageManager.saveOutgoingMessage(
-                chatId = contactId, content = "", myId = myId, encryptedPayload = encryptedPayload, status = MessageStatus.SENDING,
-                messageType = "audio", attachments = uiAttachments, uploadProgress = 0, messageId = messageId
-            )
-            Log.d(TAG, "📝 Аудиосообщение успешно записано в локальную БД Room под ID: $messageId")
-
-            // Запуск WorkManager
-            val inputData = Data.Builder().putString("messageId", messageId).putString("contactId", contactId).putString("typeMsg", "audio").build()
-            val uploadWorkRequest = OneTimeWorkRequestBuilder<MediaUploadWorker>()
-                .setInputData(inputData)
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-                .build()
-
-            WorkManager.getInstance(this@ChatActivity).enqueue(uploadWorkRequest)
-
-            withContext(Dispatchers.Main) {
-                binding.rvMessages.scrollToPosition(messageAdapter.itemCount - 1)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ Критическая ошибка при подготовке аудиосообщения к отправке", e)
-        }
-    }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
@@ -753,26 +627,7 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
         return File.createTempFile("MP4_${timeStamp}_", ".mp4", cacheDir)
     }
 
-    private suspend fun sendReadReceiptsForUnreadMessages() {
-        val unreadMessages = messageManager.getUnreadMessages(contactId)
-        if (unreadMessages.isNotEmpty()) {
-            for (msg in unreadMessages) {
-                messageManager.updateMessageStatus(contactId, msg.messageId, MessageStatus.READ)
-                SocketManager.sendReadReceipt(contactId, msg.messageId)
-            }
-        }
-    }
-
-    private fun checkContactOnlineStatus() {
-        lifecycleScope.launch {
-            try {
-                val response = NetworkClient.apiService.getUserStatus(contactId)
-                if (response.isSuccessful) updateOnlineStatus(response.body()?.isOnline ?: false)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to check user status", e)
-            }
-        }
-    }
+    private fun checkContactOnlineStatus() { viewModel.refreshOnlineStatus() }
 
     private fun updateTypingIndicator(isTyping: Boolean) {
         isContactTyping = isTyping
@@ -848,122 +703,43 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
         isContactOnline = isOnline
         binding.tvStatus.text = if (isOnline) getText(R.string.online) else getText(R.string.offline)
         binding.tvStatus.setTextColor(if (isOnline) getColor(R.color.online) else getColor(R.color.text_secondary_light))
-        lifecycleScope.launch { messageManager.updateContactOnlineStatus(contactId, isOnline) }
+        lifecycleScope.launch { viewModel.updateContactOnline( isOnline) }
     }
 
-    private fun observeMessages() {
+    private fun observeViewModel() {
         lifecycleScope.launch {
-            // ✅ Используем новый метод, который возвращает сообщения вместе с вложениями
-
-            messageManager.observeChatHistoryWithAttachments(contactId).collect { messagesWithAttachments ->
+            viewModel.messages.collect { messages ->
                 val layoutManager = binding.rvMessages.layoutManager as LinearLayoutManager
                 val oldCount = messageAdapter.itemCount
-                // "У низа" считаем ДО submitList: последняя видимая позиция
-                // не дальше чем за 2 элемента от конца
                 val wasNearBottom = layoutManager.findLastVisibleItemPosition() >= oldCount - 3
-
-                messageAdapter.submitList(messagesWithAttachments)
-
-                // post{} — выполнится ПОСЛЕ того, как RecyclerView перелэаит список.
-                // Без post скролл часто срабатывает по старому размеру/раскладке —
-                // отсюда "не проматывается при входе и при новых сообщениях".
+                messageAdapter.submitList(messages)
                 binding.rvMessages.post {
                     val newCount = messageAdapter.itemCount
-                    if (newCount == 0) return@post
-                    if (wasNearBottom || oldCount == 0) {
+                    if (newCount > 0 && (wasNearBottom || oldCount == 0)) {
                         binding.rvMessages.scrollToPosition(newCount - 1)
                     }
                 }
             }
         }
-    }
-
-    private fun handleUserTyping() {
-        if (!SocketManager.isConnected()) return
-        if (!typingStartSent) {
-            SocketManager.sendTypingStart(contactId)
-            typingStartSent = true
-        }
-        typingStopJob?.cancel()
-        typingStopJob = lifecycleScope.launch {
-            delay(3000)
-            sendTypingStopEvent()
-        }
-    }
-
-    private fun sendTypingStopEvent() {
-        if (typingStartSent && SocketManager.isConnected()) {
-            SocketManager.sendTypingStop(contactId)
-            typingStartSent = false
-        }
-        typingStopJob?.cancel()
-        typingStopJob = null
-        // 🌟 Полностью уничтожаем аниматор при закрытии экрана чата
-        typingAnimator?.cancel()
-        typingAnimator = null
-    }
-
-    private fun loadContactKeysAndInitSession() {
         lifecycleScope.launch {
-            try {
-                val response = NetworkClient.apiService.getKeysBundle(contactId)
-                if (response.isSuccessful && response.body() != null) {
-                    messageManager.saveContact(id = contactId, username = contactName, displayName = contactName, isOnline = isContactOnline)
-                    cryptoManager.initializeSession(contactId, response.body()!!)
-                    runOnUiThread {
-                        binding.btnSend.isEnabled = true
-                        binding.etMessageInput.isEnabled = true
-                        binding.tvStatus.text = if (isContactOnline) getText(R.string.online) else getText(R.string.offline)
-                        binding.tvStatus.setTextColor(if (isContactOnline) getColor(R.color.online) else getColor(R.color.text_secondary_light))
-                    }
-                } else {
-                    runOnUiThread {
-                        binding.etMessageInput.hint = "Failed to load keys"
-                        Toast.makeText(this@ChatActivity, "Key bundle empty", Toast.LENGTH_LONG).show()
-                    }
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    binding.etMessageInput.hint = "Network error"
-                    Toast.makeText(this@ChatActivity, "Network error", Toast.LENGTH_LONG).show()
-                }
+            viewModel.sessionReady.collect { ready ->
+                binding.etMessageInput.isEnabled = ready
+                binding.btnSend.isEnabled = ready
             }
         }
-    }
-
-    private fun sendPendingMessages() {
         lifecycleScope.launch {
-            messageManager.getPendingMessages(contactId).collect { pending ->
-                for (msg in pending) {
-                    try {
-                        val encryptedPayload = Gson().fromJson(msg.encryptedPayload, EncryptedPayload::class.java)
-                        val sent = SocketManager.sendEncryptedMessage(contactId, encryptedPayload, msg.messageId, msg.messageType)
-                        messageManager.updateStatus(contactId, msg.messageId, if (sent) MessageStatus.SENT else MessageStatus.FAILED)
-                    } catch (e: Exception) {
-                        messageManager.updateStatus(contactId, msg.messageId, MessageStatus.FAILED)
-                    }
-                }
-            }
+            viewModel.peerOnline.collect { updateOnlineStatus(it ?: false) }
+        }
+        lifecycleScope.launch {
+            viewModel.peerTyping.collect { updateTypingIndicator(it) }
         }
     }
 
-    private fun syncMessages() {
-        lifecycleScope.launch {
-            try {
-                MessageSyncer.syncChat(
-                    context = this@ChatActivity,
-                    cryptoManager = cryptoManager,
-                    messageManager = messageManager,
-                    chatId = contactId,
-                    myId = myId,
-                    showNotification = false,               // чат открыт — уведомления не нужны
-                    downloadingFiles = downloadingFiles     // reuse сет дедупликации Activity
-                )
-            } catch (e: Exception) {
-                Log.e(TAG, "Sync failed", e)
-            }
-        }
-    }
+    private fun handleUserTyping() { viewModel.onUserTyping() }
+
+    private fun sendTypingStopEvent() { viewModel.sendTypingStop() }
+
+    private fun sendPendingMessages() { viewModel.resendPending() }
 
     override fun onMediaClick(attachments: List<AttachmentEntity>, startPosition: Int) {
         // Оставляем только те файлы, которые уже физически скачаны на диск
@@ -998,39 +774,8 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
 
     private fun startRefresh(message: MessageEntity, attachments: List<AttachmentEntity>) {
         lifecycleScope.launch {
-            try {
-                if (!attachments.isNotEmpty()) {
-                    val payloadObject =
-                        Gson().fromJson(message.encryptedPayload, EncryptedPayload::class.java)
-                    val sent =
-                        SocketManager.sendEncryptedMessage(
-                            contactId,
-                            payloadObject,
-                            message.messageId,
-                            "text"
-                        )
-
-                    if (sent) {
-                        messageManager.updateStatus(
-                            contactId,
-                            message.messageId,
-                            MessageStatus.SENT
-                        )
-                        messageAdapter.updateMessageStatus(message.messageId, MessageStatus.SENT)
-                    } else {
-                        messageManager.updateStatus(
-                            contactId,
-                            message.messageId,
-                            MessageStatus.FAILED
-                        )
-                        Toast.makeText(this@ChatActivity, "Failed to send", Toast.LENGTH_SHORT)
-                            .show()
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Encrypt/send error", e)
-                Toast.makeText(this@ChatActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
-            }
+            viewModel.resetAttachmentProgress(message.messageId)
+            viewModel.retryMessage(message)
         }
     }
 
@@ -1050,14 +795,7 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
     }
 
     private fun deleteMessage(message: MessageEntity) {
-        lifecycleScope.launch {
-            val actionContent = MessageContent(action = "delete", targetMessageId = message.messageId)
-            val encrypted = cryptoManager.encryptMessage(actionContent, contactId)
-            if (message.status != MessageStatus.FAILED) {
-                SocketManager.sendMessageAction(contactId, encrypted, message.messageId)
-            }
-            messageManager.deleteMessage(message.messageId)
-        }
+        lifecycleScope.launch { viewModel.deleteMessage(message) }
     }
 
     private fun scrollToMessage(messageId: String) {
@@ -1067,7 +805,7 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
                 binding.rvMessages.scrollToPosition(position)
                 highlightMessage(position)
             } else {
-                val messageFromDb = messageManager.getMessageById(messageId)
+                val messageFromDb = viewModel.getMessageById(messageId)
                 if (messageFromDb != null) {
                     // Для простоты добавляем как MessageWithAttachments с пустым списком вложений
                     messageAdapter.addMessageToPosition(position, MessageWithAttachments(messageFromDb, emptyList()))
@@ -1098,147 +836,6 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
         return (dp * context.resources.displayMetrics.density).toInt()
     }
 
-    private fun getCurrentTime(): String = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-
-    private suspend fun processSelectedMedia(
-        filePaths: List<String>, // 🌟 Принимает пути к файлам кэша
-        caption: String = ""
-    ) = withContext(Dispatchers.IO) {
-        val messageId = UUID.randomUUID().toString()
-        val attachments = mutableListOf<MediaAttachment>()
-        val originalPaths = mutableListOf<String>()
-        val encryptedPaths = mutableListOf<String>()
-
-        try {
-            filePaths.forEach { tempPath ->
-                val fileId = UUID.randomUUID().toString()
-                val tempEncryptedFile = File(cacheDir, "$fileId.enc")
-
-                val originalFile = File(tempPath)
-                if (!originalFile.exists()) return@forEach
-
-                // Определяем типы по расширению нашего временного файла
-                val isVideo = originalFile.name.endsWith(".mp4")
-                val isGif = originalFile.name.endsWith(".gif")
-                val extension = if (isGif) "gif" else if (isVideo) "mp4" else "jpg"
-
-                val localCacheFile = File(cacheDir, "$fileId.$extension")
-
-                // Если это видео — сжимаем его. Если фото — просто переименовываем/перемещаем из "pre_" в постоянное имя
-                if (isVideo) {
-                    // Для сжатия видео вашему VideoHelper может потребоваться Uri. Сделаем его из нашего файла кэша:
-                    val fileUri = Uri.fromFile(originalFile)
-                    VideoHelper.compressVideo(this@ChatActivity, fileUri, localCacheFile)
-                    originalFile.delete() // Удаляем пре-кэш файл
-                } else {
-                    // Перемещаем файл в постоянный кэш сообщения
-                    originalFile.renameTo(localCacheFile)
-                }
-
-                originalPaths.add(localCacheFile.absolutePath)
-
-                // Шифрование (остается вашим без изменений)
-                val aesKey = MediaCrypto.generateAESKey()
-                MediaCrypto.encryptFile(localCacheFile, tempEncryptedFile, aesKey)
-                encryptedPaths.add(tempEncryptedFile.absolutePath)
-
-                val fileSize = tempEncryptedFile.length()
-                val aesKeyBase64 = Base64.encodeToString(MediaCrypto.keyToBytes(aesKey), Base64.NO_WRAP)
-
-                // Генерируем превью из нашего стабильного локального файла
-                val localFileUri = Uri.fromFile(localCacheFile)
-                val thumbnailBase64 = if (isVideo || isGif) {
-                    VideoHelper.generateVideoThumbnail(this@ChatActivity, localFileUri)
-                } else {
-                    ImageHelper.generateThumbnailBase64(this@ChatActivity, localFileUri)
-                }
-
-                val mediaType = when {
-                    isGif -> "image/gif"
-                    isVideo -> "video/mp4"
-                    else -> "image/jpeg"
-                }
-
-                attachments.add(
-                    MediaAttachment(
-                        fileId = fileId,
-                        encryptedKey = aesKeyBase64,
-                        mediaType = mediaType,
-                        fileName = if (isGif) "animation.gif" else if (isVideo) "video.mp4" else "photo.jpg",
-                        fileSize = fileSize,
-                        thumbnailBase64 = thumbnailBase64
-                    )
-                )
-            }
-
-            // Подготовка данных для БД
-            val messageContent = MessageContent(text = caption, attachments = attachments)
-            val encryptedPayload = cryptoManager.encryptMessage(messageContent, contactId)
-
-            val messageType = when {
-                attachments.any { it.mediaType == "image/gif" } -> "gif"
-                attachments.any { it.mediaType.startsWith("video") } -> "video"
-                else -> "image"
-            }
-
-            val uiAttachments = attachments.mapIndexed { index, att ->
-                AttachmentEntity(
-                    messageId = messageId,
-                    fileId = att.fileId,
-                    encryptedKey = att.encryptedKey,
-                    mediaType = att.mediaType,
-                    fileName = att.fileName,
-                    fileSize = att.fileSize,
-                    thumbnailBase64 = att.thumbnailBase64,
-                    localFilePath = originalPaths[index],
-                    downloadProgress = 0,
-                    uploadProgress = 0
-                )
-            }
-
-            // Мгновенно сохраняем в БД как отправляющееся (появится в UI)
-            messageManager.saveOutgoingMessage(
-                chatId = contactId,
-                content = caption,
-                myId = myId,
-                encryptedPayload = encryptedPayload,
-                status = MessageStatus.SENDING,
-                messageType = messageType,
-                attachments = uiAttachments,
-                uploadProgress = 0,
-                messageId = messageId
-            )
-
-            // 🌟 ЗАПУСК WORKMANAGER ДЛЯ СЕТЕВОЙ ЗАГРУЗКИ
-            val inputData = Data.Builder()
-                .putString("messageId", messageId)
-                .putString("contactId", contactId)
-                .putString("typeMsg", messageType)
-                .build()
-
-            val uploadWorkRequest = OneTimeWorkRequestBuilder<MediaUploadWorker>()
-                .setInputData(inputData)
-                .setConstraints(
-                    Constraints.Builder()
-                        .setRequiredNetworkType(NetworkType.CONNECTED) // Запуск только при наличии сети [1]
-                        .build()
-                )
-                .build()
-
-            WorkManager.getInstance(this@ChatActivity).enqueue(uploadWorkRequest)
-
-            withContext(Dispatchers.Main) {
-                binding.rvMessages.scrollToPosition(messageAdapter.itemCount - 1)
-            }
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to process media", e)
-            withContext(Dispatchers.Main) {
-                Toast.makeText(this@ChatActivity, "Ошибка: ${e.message}", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
     override fun onPause() {
         super.onPause()
         currentOpenChatId = null
@@ -1256,6 +853,7 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
 
     override fun onDestroy() {
         super.onDestroy()
+        viewModel.unbindSocket()
         typingStopJob?.cancel()
         sendTypingStopEvent()
         currentOpenChatId = null

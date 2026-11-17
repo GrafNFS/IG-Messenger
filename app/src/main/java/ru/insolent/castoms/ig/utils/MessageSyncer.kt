@@ -97,7 +97,14 @@ object MessageSyncer {
                                     fileName = attachment.fileName ?: "file",
                                     messageId = messageId,
                                     expectedFileSize = attachment.fileSize ?: 0L,
-                                    onProgress = {}
+                                    onProgress = { progress ->
+                                        // Room Flow перерисует UI с новым прогрессом
+                                        launch {
+                                            try {
+                                                messageManager.updateAttachmentDownloadProgress(messageId, fileId, progress)
+                                            } catch (_: Exception) {}
+                                        }
+                                    }
                                 )
                                 if (localPath != null) {
                                     NetworkClient.apiService.deleteMedia(fileId)

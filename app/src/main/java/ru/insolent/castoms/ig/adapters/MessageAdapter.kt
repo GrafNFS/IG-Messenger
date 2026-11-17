@@ -218,6 +218,8 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         val btnPlayAudio: ImageView = view.findViewById(R.id.btnPlayAudio)
         val audioWaveform: WaveformSeekBar = view.findViewById(R.id.audioWaveform)
         val tvAudioDuration: TextView = view.findViewById(R.id.tvAudioDuration)
+        // 🌟 Прогресс скачивания/загрузки аудио (безопасно: null, пока нет в layout)
+        val pbAudioProgress: android.widget.ProgressBar? = view.findViewById(R.id.pbAudioProgress)
     }
 
     class DateHeaderViewHolder(view: View) : RecyclerView.ViewHolder(view) {
@@ -322,6 +324,42 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 rawHolder.tvText.visibility = View.GONE
 
                 val audioAttachment = attachments.firstOrNull()
+
+                // 🌟 Прогресс аудио: скачивание (входящие) / загрузка (исходящие)
+                rawHolder.pbAudioProgress?.let { pb ->
+                    if (audioAttachment == null) {
+                        pb.visibility = View.GONE
+                    } else {
+                        val hasLocal = !audioAttachment.localFilePath.isNullOrEmpty() &&
+                                File(audioAttachment.localFilePath).exists()
+                        val dl = audioAttachment.downloadProgress
+                        val ul = audioAttachment.uploadProgress
+                        when {
+                            hasLocal && (message.isIncoming || ul >= 100 || ul == 0 && !message.isIncoming && dl == 0) -> {
+                                // Локальный файл есть: скрываем, если загрузка завершена или не начиналась
+                                if (!message.isIncoming && ul in 1..99) {
+                                    pb.visibility = View.VISIBLE
+                                    pb.isIndeterminate = ul <= 0
+                                    if (ul > 0) pb.progress = ul
+                                } else {
+                                    pb.visibility = View.GONE
+                                }
+                            }
+                            !message.isIncoming && ul in 1..99 -> {
+                                pb.visibility = View.VISIBLE
+                                pb.isIndeterminate = false
+                                pb.progress = ul
+                            }
+                            message.isIncoming && dl in 1..99 -> {
+                                pb.visibility = View.VISIBLE
+                                pb.isIndeterminate = dl <= 0
+                                if (dl > 0) pb.progress = dl
+                            }
+                            dl == -1 -> pb.visibility = View.GONE
+                            else -> pb.visibility = View.GONE
+                        }
+                    }
+                }
 
                 if (audioAttachment != null && !audioAttachment.localFilePath.isNullOrEmpty()) {
                     val file = File(audioAttachment.localFilePath)

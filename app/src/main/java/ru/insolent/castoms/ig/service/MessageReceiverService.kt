@@ -217,7 +217,13 @@ class MessageReceiverService : Service() {
                             context = this@MessageReceiverService, fileId = fileId,
                             encryptedKeyBase64 = attachment.encryptedKey, mediaType = attachment.mediaType ?: "image/jpeg",
                             fileName = attachment.fileName ?: "file", messageId = messageId, expectedFileSize = attachment.fileSize ?: 0L,
-                            onProgress = {}
+                            onProgress = { progress ->
+                                serviceScope.launch {
+                                    try {
+                                        messageManager.updateAttachmentDownloadProgress(messageId, fileId, progress)
+                                    } catch (_: Exception) {}
+                                }
+                            }
                         )
 
                         if (localPath != null) {

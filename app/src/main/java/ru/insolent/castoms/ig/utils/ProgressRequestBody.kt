@@ -1,37 +1,56 @@
-package ru.insolent.castoms.ig.network
+package ru.insolent.castoms.ig.utils
 
 import okhttp3.MediaType
 import okhttp3.RequestBody
 import okio.Buffer
 import okio.BufferedSink
 import okio.ForwardingSink
-import okio.Okio
 import okio.Sink
-import okio.buffer // ✅ Добавляем импорт extension function
+import okio.buffer
+import okio.source
+import java.io.File
 
+/**
+ * RequestBody с отслеживанием прогресса загрузки.
+ * Колбэк вызывается на фоновом потоке OkHttp — не делать в нём UI-операций.
+ */
 class ProgressRequestBody(
-    private val delegate: RequestBody,
-    private val progressListener: (bytesWritten: Long, contentLength: Long) -> Unit
+    private val file: File,
+    private val contentType: MediaType?,
+    private val onProgress: (percent: Int) -> Unit
 ) : RequestBody() {
 
-    override fun contentType(): MediaType? = delegate.contentType()
+    override fun contentType(): MediaType? = contentType
 
-    override fun contentLength(): Long = delegate.contentLength()
+    override fun contentLength(): Long = file.length()
 
     override fun writeTo(sink: BufferedSink) {
-        val forwardingSink = object : ForwardingSink(sink) {
-            var bytesWritten = 0L
+        val total = file.length()
+        if (total <= 0) {
+            sink.writeAll(file.source())
+            onProgress(100)
+            return
+        }
 
+        var uploaded = 0L
+        var lastPercent = -1
+
+        val source = file.source()
+        val forwarding: Sink = object : ForwardingSink(sink) {
             override fun write(source: Buffer, byteCount: Long) {
                 super.write(source, byteCount)
-                bytesWritten += byteCount
-                progressListener(bytesWritten, contentLength())
+                uploaded += byteCount
+                val percent = ((uploaded * 100) / total).toInt()
+                if (percent != lastPercent) {
+                    lastPercent = percent
+                    onProgress(percent)
+                }
             }
         }
 
-        // ✅ ИСПРАВЛЕНО: используем extension function
-        val bufferedSink = forwardingSink.buffer()
-        delegate.writeTo(bufferedSink)
+        val bufferedSink = forwarding.buffer()
+        bufferedSink.writeAll(source)
         bufferedSink.flush()
+        onProgress(100)
     }
 }

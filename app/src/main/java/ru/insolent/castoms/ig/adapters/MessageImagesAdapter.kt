@@ -6,7 +6,6 @@ import android.util.Base64
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.ProgressBar
 import androidx.recyclerview.widget.GridLayoutManager
@@ -16,18 +15,25 @@ import ru.insolent.castoms.ig.R
 import ru.insolent.castoms.ig.database.AttachmentEntity
 import java.io.File
 
+/**
+ * 🌟 Добавлено: прогресс ЗАГРУЗКИ (upload) для исходящих вложений.
+ * isOutgoing = true → показываем uploadProgress (0..99), локальное фото видно сразу.
+ */
 class MessageImagesAdapter(
     private val attachments: List<AttachmentEntity>,
+    private val isOutgoing: Boolean = false,
     private val onClick: (List<AttachmentEntity>, Int) -> Unit,
-    private val onRetryClick: (AttachmentEntity) -> Unit // 🌟 Добавляем колбэк для перезапуска
+    private val onRetryClick: (AttachmentEntity) -> Unit
 ) : RecyclerView.Adapter<MessageImagesAdapter.ViewHolder>() {
 
-    class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+    class ViewHolder(view: View) : ViewHolderBase(view)
+
+    abstract class ViewHolderBase(view: View) : RecyclerView.ViewHolder(view) {
         val ivImage: com.google.android.material.imageview.ShapeableImageView = view.findViewById(R.id.ivMessageImage)
         val progressBar: ProgressBar = view.findViewById(R.id.progressBar)
         val ivPlaceholder: ImageView = view.findViewById(R.id.ivPlaceholder)
         val ivPlayIcon: ImageView = view.findViewById(R.id.ivPlayIcon)
-        val ivErrorIcon: ImageView = view.findViewById(R.id.ivErrorIcon) // 🌟 Новая иконка ошибки
+        val ivErrorIcon: ImageView = view.findViewById(R.id.ivErrorIcon)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
@@ -47,11 +53,7 @@ class MessageImagesAdapter(
         val isFullWidth = total == 1 || (total % 2 != 0 && position == total - 1)
 
         if (isFullWidth) {
-            if (total == 1) {
-                layoutParams.height = dpToPx(context, 200)
-            } else {
-                layoutParams.height = dpToPx(context, 140)
-            }
+            layoutParams.height = dpToPx(context, if (total == 1) 200 else 140)
         } else {
             layoutParams.height = dpToPx(context, 105)
         }
@@ -63,13 +65,50 @@ class MessageImagesAdapter(
         holder.ivErrorIcon.visibility = View.GONE
 
         val progress = attachment.downloadProgress
-        val isVideo = attachment.mediaType.startsWith("video") // 🌟 Выносим проверку типа медиа
+        val isVideo = attachment.mediaType.startsWith("video")
+        val uploadProgress = attachment.uploadProgress
 
         // Настраиваем иконку Play сразу для всех состояний видео
         holder.ivPlayIcon.visibility = if (isVideo && progress != -1) View.VISIBLE else View.GONE
 
+        if (isOutgoing) {
+            // ===== ИСХОДЯЩИЕ: локальный файл есть всегда, поверх — прогресс загрузки =====
+            if (!attachment.thumbnailBase64.isNullOrEmpty()) {
+                setBase64Thumbnail(attachment.thumbnailBase64, holder.ivImage)
+            } else if (!attachment.localFilePath.isNullOrEmpty() && File(attachment.localFilePath).exists()) {
+                if (isVideo) {
+                    holder.ivImage.setImageResource(R.drawable.ic_image_placeholder)
+                } else {
+                    Picasso.get().load(File(attachment.localFilePath)).fit().centerCrop().into(holder.ivImage)
+                }
+            } else {
+                holder.ivImage.setImageResource(R.drawable.ic_image_placeholder)
+            }
+
+            when {
+                uploadProgress in 0..99 -> {
+                    holder.progressBar.visibility = View.VISIBLE
+                    holder.progressBar.isIndeterminate = uploadProgress <= 0
+                    if (uploadProgress > 0) holder.progressBar.progress = uploadProgress
+                    holder.ivImage.alpha = 0.7f
+                    holder.itemView.setOnClickListener(null)
+                }
+                progress == -1 -> { // ошибка ОТПРАВКИ
+                    holder.progressBar.visibility = View.GONE
+                    holder.ivErrorIcon.visibility = View.VISIBLE
+                    holder.ivImage.alpha = 0.4f
+                    holder.itemView.setOnClickListener { onRetryClick(attachment) }
+                }
+                else -> { // загружено на сервер
+                    holder.progressBar.visibility = View.GONE
+                    holder.itemView.setOnClickListener { onClick(attachments, position) }
+                }
+            }
+            return
+        }
+
+        // ===== ВХОДЯЩИЕ: прежняя логика (скачивание) =====
         when {
-            // ❌ 1. СОСТОЯНИЕ ОШИБКИ СКАЧИВАНИЯ
             progress == -1 -> {
                 holder.progressBar.visibility = View.GONE
                 holder.ivPlaceholder.visibility = View.GONE
@@ -86,32 +125,27 @@ class MessageImagesAdapter(
                 holder.itemView.setOnClickListener { onRetryClick(attachment) }
             }
 
-            // ✅ 2. ФАЙЛ УСПЕШНО СКАЧАН И СУЩЕСТВУЕТ НА ДИСКЕ
             !attachment.localFilePath.isNullOrEmpty() && File(attachment.localFilePath).exists() -> {
                 holder.progressBar.visibility = View.GONE
                 holder.ivPlaceholder.visibility = View.GONE
 
                 if (isVideo) {
-                    // 🌟 ИСПРАВЛЕНИЕ: Если это видео — Picasso его не загрузит!
-                    // Берем готовое превью из базы данных, чтобы оно не исчезало после скачивания.
                     if (!attachment.thumbnailBase64.isNullOrEmpty()) {
                         setBase64Thumbnail(attachment.thumbnailBase64, holder.ivImage)
                     } else {
                         holder.ivImage.setImageResource(R.drawable.ic_image_placeholder)
                     }
                 } else {
-                    // Если это обычное фото — без проблем грузим через Picasso оригинальный файл
                     Picasso.get().load(File(attachment.localFilePath)).fit().centerCrop().into(holder.ivImage)
                 }
 
-                // Стандартный клик: открываем просмотр
                 holder.itemView.setOnClickListener { onClick(attachments, position) }
             }
 
-            // ⏳ 3. ФАЙЛ СКАЧИВАЕТСЯ (ИЛИ ЕЩЕ НЕ СКАЧАН, НО ЕСТЬ ПРЕВЬЮ В БД)
             !attachment.thumbnailBase64.isNullOrEmpty() -> {
                 holder.progressBar.visibility = View.VISIBLE
-                holder.progressBar.progress = progress.coerceIn(0, 100)
+                holder.progressBar.isIndeterminate = progress <= 0
+                if (progress > 0) holder.progressBar.progress = progress.coerceIn(0, 100)
                 holder.ivPlaceholder.visibility = View.GONE
 
                 setBase64Thumbnail(attachment.thumbnailBase64, holder.ivImage)
@@ -120,10 +154,10 @@ class MessageImagesAdapter(
                 holder.itemView.setOnClickListener(null)
             }
 
-            // 🚫 4. НЕТ НИ ПРЕВЮ, НИ ФАЙЛА (ПОЛНАЯ ЗАГЛУШКА)
             else -> {
                 holder.progressBar.visibility = View.VISIBLE
-                holder.progressBar.progress = progress.coerceIn(0, 100)
+                holder.progressBar.isIndeterminate = progress <= 0
+                if (progress > 0) holder.progressBar.progress = progress.coerceIn(0, 100)
                 holder.ivPlaceholder.visibility = View.VISIBLE
                 holder.ivImage.setImageResource(R.drawable.ic_image_placeholder)
 
@@ -132,7 +166,6 @@ class MessageImagesAdapter(
         }
     }
 
-    // 🌟 Вспомогательный метод для красивой и безопасной отрисовки Base64 миниатюр
     private fun setBase64Thumbnail(base64String: String, imageView: ImageView) {
         try {
             val imageBytes = Base64.decode(base64String, Base64.NO_WRAP)
