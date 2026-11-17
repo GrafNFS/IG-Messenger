@@ -239,6 +239,11 @@ class MessageCryptoManager(
                 Log.e(TAG, "❌ Failed to decrypt even after trusting new identity", retryException)
                 throw Exception("Decryption failed: Untrusted identity could not be resolved.")
             }
+        } catch (e: org.signal.libsignal.protocol.DuplicateMessageException) {
+            // Нормальный случай при догоне истории: сообщение уже было обработано
+            // сессией ранее (счётчик ratchet продвинут). Это не ошибка — не пишем ERROR.
+            Log.d(TAG, "↩️ Duplicate (old counter) from $senderUserId — already processed, skip")
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "❌ Decryption failed for $senderUserId", e)
             throw e

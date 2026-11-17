@@ -53,6 +53,10 @@ object MessageSyncer {
                 val senderId = dto.senderId.takeIf { it.isNotBlank() } ?: continue
                 if (senderId == myId) continue // свои исходящие уже есть локально
 
+                // ✅ Уже доставлялось ранее (по сокету) — не дешифруем повторно:
+                //    иначе сессия бросает DuplicateMessageException (old counter)
+                if (messageManager.getMessageById(messageId) != null) continue
+
                 try {
                     val payloadJson = Gson().toJson(dto.payload)
                     val payload = Gson().fromJson(payloadJson, EncryptedPayload::class.java)
