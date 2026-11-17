@@ -480,6 +480,20 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         typingStopJob = null
     }
 
+    /** Повторное скачивание вложения (ретрай по крестику в чате) */
+    suspend fun downloadAttachment(attachment: ru.insolent.castoms.ig.database.AttachmentEntity): String? =
+        withContext(Dispatchers.IO) {
+            messageManager.downloadAndDecryptMedia(
+                context = context,
+                fileId = attachment.fileId,
+                encryptedKeyBase64 = attachment.encryptedKey,
+                mediaType = attachment.mediaType,
+                fileName = attachment.fileName,
+                messageId = attachment.messageId,
+                expectedFileSize = attachment.fileSize
+            )
+        }
+
     /** Сброс прогресса вложений перед ретраем */
     suspend fun resetAttachmentProgress(messageId: String) = withContext(Dispatchers.IO) {
         try {

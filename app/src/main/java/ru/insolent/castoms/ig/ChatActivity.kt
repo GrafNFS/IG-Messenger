@@ -230,15 +230,7 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
                     }
 
                     // 3. Запускаем метод скачивания по новой в фоновом режиме
-                    messageManager.downloadAndDecryptMedia(
-                        context = this@ChatActivity,
-                        fileId = attachment.fileId,
-                        encryptedKeyBase64 = attachment.encryptedKey,
-                        mediaType = attachment.mediaType,
-                        fileName = attachment.fileName,
-                        messageId = attachment.messageId,
-                        expectedFileSize = attachment.fileSize
-                    )
+                    viewModel.downloadAttachment(attachment)
                 }
             }
         })
