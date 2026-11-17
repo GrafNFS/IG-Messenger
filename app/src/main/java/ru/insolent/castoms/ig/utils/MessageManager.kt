@@ -5,6 +5,7 @@ import android.util.Log
 import com.google.gson.Gson
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import ru.insolent.castoms.ig.crypto.EncryptedPayload
 import ru.insolent.castoms.ig.crypto.MediaAttachment
 import ru.insolent.castoms.ig.crypto.MediaCrypto
@@ -398,4 +399,8 @@ class MessageManager(private val context: Context) {
     suspend fun updateMessagePayload(messageId: String, payload: EncryptedPayload) {
         dao.updateMessagePayload(messageId, Gson().toJson(payload))
     }
+
+    suspend fun getLastMessageTimestamp(chatId: String): Long? =
+        observeChatHistoryWithAttachments(chatId).first()
+            .maxOfOrNull { it.message.timestamp }
 }

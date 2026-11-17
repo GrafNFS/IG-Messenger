@@ -49,7 +49,8 @@ interface ApiService {
     @GET("api/chats/{chatId}/messages")
     suspend fun getChatHistory(
         @Path("chatId") chatId: String,
-        @Query("userId") userId: String // ✅ Добавили параметр
+        @Query("userId") userId: String,
+        @Query("since") since: Long? = null   // ← НОВОЕ: timestamp в мс
     ): Response<List<MessageDTO>>
 
     @GET("api/users/{userId}/status")

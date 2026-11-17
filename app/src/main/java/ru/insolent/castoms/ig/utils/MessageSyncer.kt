@@ -40,7 +40,8 @@ object MessageSyncer {
     ): Int = withContext(Dispatchers.IO) {
         var newCount = 0
         try {
-            val response = NetworkClient.apiService.getChatHistory(chatId, myId)
+            val since = messageManager.getLastMessageTimestamp(chatId)
+            val response = NetworkClient.apiService.getChatHistory(chatId, myId, since)
             if (!response.isSuccessful || response.body() == null) {
                 Log.w(TAG, "History for $chatId failed: ${response.code()}")
                 return@withContext 0
