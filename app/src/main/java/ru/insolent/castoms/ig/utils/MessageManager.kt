@@ -34,7 +34,7 @@ class MessageManager(private val context: Context) {
         chatId: String,
         content: String,
         myId: String,
-        encryptedPayload: EncryptedPayload,
+        encryptedPayload: EncryptedPayload?,
         status: MessageStatus,
         replyToMessageId: String? = null,
         replyToSenderName: String? = null,
@@ -371,14 +371,15 @@ class MessageManager(private val context: Context) {
         return daoChat.getConversations()
     }
 
-    suspend fun saveContact(id: String, username: String, displayName: String?, avatarUrl: String? = null, isOnline: Boolean) {
+    suspend fun saveContact(id: String, username: String, displayName: String?, avatarUrl: String? = null, isOnline: Boolean, isGroup: Boolean = false) {
         val contact = ContactEntity(
             id = id,
             username = username,
             displayName = displayName,
             avatarUrl = avatarUrl,
             lastSeen = null,
-            isOnline = isOnline
+            isOnline = isOnline,
+            isGroup = isGroup
         )
         contactDao.insertContact(contact)
     }

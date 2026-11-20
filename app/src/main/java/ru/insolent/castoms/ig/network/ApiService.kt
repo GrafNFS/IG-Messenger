@@ -28,7 +28,7 @@ interface ApiService {
     ): Response<List<UserSearchResult>>
 
     @GET("api/contacts")
-    suspend fun getMyContacts(@Query("userId") userId: String): Response<List<ApiContact>>
+    suspend fun getMyContacts(): Response<List<ApiContact>>
 
     @POST("api/contacts")
     suspend fun addContact(@Body request: AddContactRequest): Response<AddContactResponse>
@@ -98,6 +98,15 @@ interface ApiService {
 
     @GET("api/chats")
     suspend fun getMyChats(): Response<List<String>>
+
+    @POST("api/groups")
+    suspend fun createGroup(@Body request: CreateGroupRequest): Response<GroupResponse>
+
+    @GET("api/groups")
+    suspend fun getMyGroups(): Response<List<GroupResponse>>
+
+    @GET("api/groups/{groupId}/members")
+    suspend fun getGroupMembers(@Path("groupId") groupId: String): Response<List<GroupMemberDto>>
 }
 
 // === МОДЕЛИ ДАННЫХ ===
@@ -225,6 +234,28 @@ data class MediaUploadResponse(
     val size: Long,
     val uploadedAt: Long
 )
+
+data class CreateGroupRequest(val name: String, val memberIds: List<String>)
+
+data class GroupResponse(
+    val id: String,
+    val name: String,
+    val avatarUrl: String? = null,
+    val createdById: String? = null,
+    val myRole: String? = null,
+    val members: List<GroupMemberDto> = emptyList()
+)
+
+data class GroupMemberDto(
+    val userId: String,
+    val role: String? = null,
+    val username: String? = null,
+    val displayName: String? = null,
+    val avatarUrl: String? = null
+)
+
+/** Entry зашифрованного сообщения для конкретного участника группы */
+data class GroupPayload(val userId: String, val type: Int, val data: String)
 
 data class RemainingKeysResponse(val remaining: Int)
 

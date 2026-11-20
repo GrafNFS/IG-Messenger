@@ -98,7 +98,7 @@ class ContactsFragment : Fragment() {
         val userId = sessionManager.getUserId() ?: return
         viewLifecycleOwner.lifecycleScope.launch {
             try {
-                val response = NetworkClient.apiService.getMyContacts(userId)
+                val response = NetworkClient.apiService.getMyContacts()
                 if (response.isSuccessful && response.body() != null) {
                     val apiContacts = response.body()!!
                     myContactsCache.clear()

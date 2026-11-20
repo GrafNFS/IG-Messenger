@@ -58,7 +58,21 @@ class MediaUploadWorker(
             return Result.failure()
         }
 
-        val payloadObject = com.google.gson.Gson().fromJson(encryptedPayloadJson, EncryptedPayload::class.java)
+        // 🌟 Групповое сообщение: encryptedPayload = {payloads:[{userId,type,data}...]}
+        //    (маркер type=-1). Отправляем через group_message вместо private_message.
+        val gson = com.google.gson.Gson()
+        val groupPayloads: List<ru.insolent.castoms.ig.network.GroupPayload>? = try {
+            val obj = com.google.gson.JsonParser.parseString(encryptedPayloadJson).asJsonObject
+            if (obj.has("payloads")) {
+                obj.getAsJsonArray("payloads").map {
+                    val e = it.asJsonObject
+                    ru.insolent.castoms.ig.network.GroupPayload(
+                        e.get("userId").asString, e.get("type").asInt, e.get("data").asString
+                    )
+                }
+            } else null
+        } catch (_: Exception) { null }
+        val payloadObject = gson.fromJson(encryptedPayloadJson, EncryptedPayload::class.java)
         val tempFilesList = mutableListOf<File>()
 
         try {
@@ -121,7 +135,11 @@ class MediaUploadWorker(
             }
 
             Log.d("MediaUploadWorker", "📨 Все файлы на сервере. Отправляем сокет...")
-            val isSocketSent = SocketManager.sendEncryptedMessage(contactId, payloadObject, messageId, typeMsg)
+            val isSocketSent = if (groupPayloads != null) {
+                SocketManager.sendGroupMessage(contactId, groupPayloads, messageId, typeMsg)
+            } else {
+                SocketManager.sendEncryptedMessage(contactId, payloadObject, messageId, typeMsg)
+            }
             Log.d("MediaUploadWorker", "🔌 Статус отправки сокета: $isSocketSent")
 
             if (isSocketSent) {

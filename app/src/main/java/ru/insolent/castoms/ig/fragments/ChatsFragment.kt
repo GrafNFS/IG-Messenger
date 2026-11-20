@@ -1,22 +1,22 @@
 package ru.insolent.castoms.ig.fragments
 
-import android.animation.ObjectAnimator
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.animation.AccelerateDecelerateInterpolator
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import kotlinx.coroutines.launch
 import ru.insolent.castoms.ig.ChatActivity
-import ru.insolent.castoms.ig.R
 import ru.insolent.castoms.ig.adapters.ChatAdapter
+import ru.insolent.castoms.ig.database.ContactEntity
+import ru.insolent.castoms.ig.database.CryptoDatabase
 import ru.insolent.castoms.ig.databinding.FragmentChatsBinding
-import ru.insolent.castoms.ig.network.SocketManager
+import ru.insolent.castoms.ig.groups.CreateGroupActivity
+import ru.insolent.castoms.ig.utils.GroupManager
 import ru.insolent.castoms.ig.utils.MessageManager
 
 class ChatsFragment : Fragment() {
@@ -25,11 +25,14 @@ class ChatsFragment : Fragment() {
     private val binding get() = _binding!!
 
     private lateinit var chatAdapter: ChatAdapter
-    private lateinit var messageManager: MessageManager
-    private var isFabVisible = true
+    private lateinit var db: CryptoDatabase
+    private val messageManager by lazy { MessageManager(requireContext()) }
+
+    private val TAG = "ChatsFragment"
 
     override fun onCreateView(
-        inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?
+        inflater: LayoutInflater, container: ViewGroup?,
+        savedInstanceState: Bundle?
     ): View {
         _binding = FragmentChatsBinding.inflate(inflater, container, false)
         return binding.root
@@ -37,82 +40,51 @@ class ChatsFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        messageManager = MessageManager(requireContext())
 
-        setupRecyclerView()
-        setupFAB()
-        loadConversations()
-        observeUserStatus()
-    }
+        db = CryptoDatabase.getDatabase(requireContext())
 
-    private fun setupRecyclerView() {
-        binding.rvChats.layoutManager = LinearLayoutManager(requireContext())
-        chatAdapter = ChatAdapter() { conversation ->
-            openChat(conversation.contactId, conversation.contactName)
+        binding.rvChats.layoutManager = LinearLayoutManager(context)
+
+        chatAdapter = ChatAdapter { conversation ->
+            onChatClicked(conversation.contactId)
         }
         binding.rvChats.adapter = chatAdapter
-    }
 
-    private fun setupFAB() {
-        binding.fabNewChat.setOnClickListener {
-            // TODO: Открыть диалог создания нового чата
-            Log.d("ChatsFragment", "FAB clicked")
+        // 🌟 Подтягиваем группы с сервера (создают псевдо-контакты → появятся в списке)
+        viewLifecycleOwner.lifecycleScope.launch {
+            try { GroupManager(requireContext()).refreshMyGroups() } catch (e: Exception) {
+                Log.e(TAG, "refresh groups failed", e)
+            }
         }
 
-        binding.rvChats.addOnScrollListener(object : androidx.recyclerview.widget.RecyclerView.OnScrollListener() {
-            override fun onScrolled(recyclerView: androidx.recyclerview.widget.RecyclerView, dx: Int, dy: Int) {
-                if (dy > 10 && isFabVisible) hideFAB()
-                else if (dy < -5 && !isFabVisible) showFAB()
-            }
-        })
+        loadConversations()
+
+        binding.fabNewChat.setOnClickListener {
+            // 🌟 FAB пока ведёт на создание группы
+            startActivity(Intent(requireContext(), CreateGroupActivity::class.java))
+        }
+    }
+
+    private fun onChatClicked(chatId: String) {
+        // Контакт читаем через MessageManager (suspend) — синхронного метода в DAO нет,
+        // а Room запрещает запросы на main-потоке
+        viewLifecycleOwner.lifecycleScope.launch {
+            val contact = messageManager.getContactById(chatId) as? ContactEntity
+            val intent = Intent(context, ChatActivity::class.java)
+            intent.putExtra("EXTRA_CONTACT_ID", chatId)
+            intent.putExtra("EXTRA_NAME", contact?.displayName ?: contact?.username ?: "Собеседник")
+            intent.putExtra("EXTRA_IS_GROUP", contact?.isGroup ?: false)   // 🌟
+            startActivity(intent)
+        }
     }
 
     private fun loadConversations() {
         viewLifecycleOwner.lifecycleScope.launch {
-            messageManager.getConversations().collect { conversations ->
-                Log.d("ChatsFragment", "🔄 Flow emitted ${conversations.size} conversations")
-                chatAdapter.submitList(conversations)
+            db.conversationDao().getConversations().collect { conversations ->
+                val sortedConversations = conversations.sortedByDescending { it.lastMessageTime }
+                chatAdapter.submitList(sortedConversations)
             }
         }
-    }
-
-    private fun observeUserStatus() {
-        // Глобальный слушатель статусов — работает пока Fragment жив
-        SocketManager.onUserStatusChanged = { userId, isOnline ->
-            Log.d("ChatsFragment", "📡 User $userId isOnline = $isOnline")
-            viewLifecycleOwner.lifecycleScope.launch {
-                try {
-                    messageManager.updateContactOnlineStatus(userId, isOnline)
-                } catch (e: Exception) {
-                    Log.e("ChatsFragment", "❌ Failed to update DB status", e)
-                }
-            }
-        }
-    }
-
-    private fun openChat(contactId: String, contactName: String) {
-        val intent = Intent(requireContext(), ChatActivity::class.java).apply {
-            putExtra("EXTRA_CONTACT_ID", contactId)
-            putExtra("EXTRA_CONTACT_NAME", contactName)
-            putExtra("EXTRA_CONTACT_AVATAR", R.drawable.ic_default_avatar)
-        }
-        startActivity(intent)
-    }
-
-    private fun hideFAB() {
-        isFabVisible = false
-        ObjectAnimator.ofFloat(binding.fabNewChat, "translationY", binding.fabNewChat.height + 40f).apply {
-            duration = 300; interpolator = AccelerateDecelerateInterpolator(); start()
-        }
-        binding.fabNewChat.hide()
-    }
-
-    private fun showFAB() {
-        isFabVisible = true
-        ObjectAnimator.ofFloat(binding.fabNewChat, "translationY", 0f).apply {
-            duration = 300; interpolator = AccelerateDecelerateInterpolator(); start()
-        }
-        binding.fabNewChat.show()
     }
 
     override fun onDestroyView() {

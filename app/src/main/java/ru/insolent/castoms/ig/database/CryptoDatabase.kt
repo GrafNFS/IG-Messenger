@@ -82,17 +82,17 @@ interface CryptoDao {
         PreKeyRecordEntity::class,
         SignedPreKeyRecordEntity::class,
         IdentityRecordEntity::class,
-        MessageEntity::class,  // ✅ Добавили MessageEntity
+        MessageEntity::class,
         ContactEntity::class,
         AttachmentEntity::class,
         UserProfileEntity::class,
         SignalRecord::class
     ],
-    version = 4  // ✅ Увеличили версию для миграции
+    version = 5  // ✅ isGroup у контактов (групповые чаты)
 )
 abstract class CryptoDatabase : RoomDatabase() {
     abstract fun cryptoDao(): CryptoDao
-    abstract fun messageDao(): MessageDao  // ✅ Добавили метод для ru.insolent.castoms.ig.database.MessageDao
+    abstract fun messageDao(): MessageDao
     abstract fun conversationDao(): ConversationDao
     abstract fun contactDao(): ContactDao
     abstract fun userProfileDao(): UserProfileDao
@@ -107,8 +107,7 @@ abstract class CryptoDatabase : RoomDatabase() {
                     CryptoDatabase::class.java,
                     "crypto_store"
                 )
-                    // ✅ Если нужно, добавь миграцию:
-                    .addMigrations(MIGRATION_3_4)
+                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5)
                     .build().also { INSTANCE = it }
             }
         }

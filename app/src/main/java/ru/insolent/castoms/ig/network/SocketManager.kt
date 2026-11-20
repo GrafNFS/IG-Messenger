@@ -41,6 +41,9 @@ object SocketManager {
     // Срабатывает при каждом успешном (пере)подключении сокета
     var onConnected: (() -> Unit)? = null
 
+    // 🌟 Групповые сообщения: сервер присылает ЕГО entry (уже выбран по userId)
+    var onGroupMessage: ((groupId: String, from: String, payload: EncryptedPayload, messageId: String, timestamp: Long) -> Unit)? = null
+
     /**
      * Инициализация контекстом приложения. Вызывать ОДИН РАЗ до connect().
      */
@@ -116,6 +119,23 @@ object SocketManager {
                 )
 
                 onMessageReceived?.invoke(from, encrypted, messageId, timestamp)
+            }
+
+            // 🌟 Входящее групповое сообщение
+            socket?.on("group_message") { args ->
+                val data = args[0] as JSONObject
+                val groupId = data.getString("groupId")
+                val from = data.getString("from")
+                val payloadJson = data.getJSONObject("payload")
+                val messageId = data.optString("messageId", "")
+                val timestamp = data.optLong("timestamp", System.currentTimeMillis())
+
+                val encrypted = EncryptedPayload(
+                    type = payloadJson.getInt("type"),
+                    data = payloadJson.getString("data")
+                )
+                Log.d(TAG, "👥 Group message in $groupId from $from, msgId: $messageId")
+                onGroupMessage?.invoke(groupId, from, encrypted, messageId, timestamp)
             }
 
             socket?.on("message_delivered") { args ->
@@ -222,6 +242,29 @@ object SocketManager {
         }
         socket?.emit("private_message", data)
         Log.d(TAG, "📤 Sent message $messageId to $targetUserId typeMsg $typeMsg")
+        return true
+    }
+
+    /** Группа: payloads — зашифровано ОТДЕЛЬНО для каждого участника (pairwise) */
+    fun sendGroupMessage(groupId: String, payloads: List<GroupPayload>, messageId: String, typeMsg: String): Boolean {
+        if (socket?.connected() != true) return false
+
+        val arr = org.json.JSONArray()
+        for (p in payloads) {
+            arr.put(JSONObject().apply {
+                put("userId", p.userId)
+                put("type", p.type)
+                put("data", p.data)
+            })
+        }
+        val data = JSONObject().apply {
+            put("groupId", groupId)
+            put("typeMsg", typeMsg)
+            put("messageId", messageId)
+            put("payloads", arr)
+        }
+        socket?.emit("group_message", data)
+        Log.d(TAG, "👤➡️👥 Sent group message $messageId to $groupId (${payloads.size} recipients)")
         return true
     }
 

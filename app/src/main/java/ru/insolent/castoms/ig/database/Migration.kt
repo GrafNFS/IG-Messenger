@@ -19,8 +19,6 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
                 PRIMARY KEY(`chatId`, `messageId`)
             )
         """.trimIndent())
-
-        // Создаём индекс для быстрого поиска по чату
         database.execSQL("""
             CREATE INDEX IF NOT EXISTS `idx_messages_chatId` ON `messages` (`chatId`)
         """.trimIndent())
@@ -51,5 +49,14 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
                 PRIMARY KEY(`key`)
             )
         """.trimIndent())
+    }
+}
+
+// Миграция 4 -> 5: флаг isGroup у контактов (группы = псевдо-контакты)
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL(
+            "ALTER TABLE `contacts` ADD COLUMN `isGroup` INTEGER NOT NULL DEFAULT 0"
+        )
     }
 }

@@ -31,8 +31,10 @@ import ru.insolent.castoms.ig.database.AttachmentEntity
 import ru.insolent.castoms.ig.database.MessageEntity
 import ru.insolent.castoms.ig.database.MessageStatus
 import ru.insolent.castoms.ig.database.MessageWithAttachments
+import ru.insolent.castoms.ig.network.GroupPayload
 import ru.insolent.castoms.ig.network.NetworkClient
 import ru.insolent.castoms.ig.network.SocketManager
+import ru.insolent.castoms.ig.utils.GroupManager
 import ru.insolent.castoms.ig.service.MediaUploadWorker
 import ru.insolent.castoms.ig.utils.ImageHelper
 import ru.insolent.castoms.ig.utils.MessageManager
@@ -66,6 +68,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private var contactName: String = ""
 
     private lateinit var cryptoManager: MessageCryptoManager
+    private lateinit var groupManager: GroupManager
+    private var isGroup = false
 
     // === Состояние для UI ===
     private val _sessionReady = MutableStateFlow(false)
@@ -85,10 +89,38 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private var typingStartSent = false
     private var typingStopJob: kotlinx.coroutines.Job? = null
 
-    fun setup(chatId: String, contactName: String) {
+    fun setup(chatId: String, contactName: String, isGroup: Boolean = false) {
         this.chatId = chatId
         this.contactName = contactName
+        this.isGroup = isGroup
         this.cryptoManager = MessageCryptoManager(myId, context)
+        this.groupManager = GroupManager(context)
+    }
+
+    // ==================== ГРУППЫ: pairwise-шифрование ====================
+
+    /** Сессия с участником, с ленивой инициализацией по key bundle */
+    private suspend fun encryptWithLazySession(content: MessageContent, remoteUserId: String): EncryptedPayload {
+        return try {
+            cryptoManager.encryptMessage(content, remoteUserId)
+        } catch (e: Exception) {
+            val needInit = e is org.signal.libsignal.protocol.NoSessionException ||
+                    (e is IllegalStateException && e.message?.contains("Session not ready") == true)
+            if (!needInit) throw e
+            val bundleResp = NetworkClient.apiService.getKeysBundle(remoteUserId)
+            val bundle = bundleResp.body() ?: throw e
+            cryptoManager.initializeSession(remoteUserId, bundle)
+            cryptoManager.encryptMessage(content, remoteUserId)
+        }
+    }
+
+    /** Шифруем контент ОТДЕЛЬНО для каждого участника группы (вариант А) */
+    private suspend fun buildGroupPayloads(content: MessageContent): List<GroupPayload> {
+        val members = groupManager.getMembers(chatId).filter { it.userId != myId }
+        return members.map { m ->
+            val p = encryptWithLazySession(content, m.userId)
+            GroupPayload(m.userId, p.type, p.data)
+        }
     }
 
     // ==================== Сессия и ключи ====================
@@ -97,6 +129,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (chatId.isEmpty()) return
         viewModelScope.launch {
             try {
+                if (isGroup) {
+                    // Группа: подтягиваем состав, участники сохраняются как контакты.
+                    // Сессии строятся лениво — при первой отправке/дешифровке.
+                    groupManager.getMembers(chatId)
+                    _sessionReady.value = true
+                    return@launch
+                }
                 val response = NetworkClient.apiService.getKeysBundle(chatId)
                 if (response.isSuccessful && response.body() != null) {
                     messageManager.saveContact(
@@ -129,9 +168,27 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 replyToSenderName = replyToSenderName,
                 replyToContent = replyToContent
             )
+            val messageId: String
+
+            if (isGroup) {
+                // Сначала сохраняем (для UI), потом шифруем для каждого участника
+                messageId = messageManager.saveOutgoingMessage(
+                    chatId = chatId, content = text, myId = myId,
+                    encryptedPayload = null,
+                    status = MessageStatus.SENDING,
+                    replyToMessageId = replyToMessageId,
+                    replyToSenderName = replyToSenderName,
+                    replyToContent = replyToContent
+                )
+                val payloads = buildGroupPayloads(content)
+                val sent = SocketManager.sendGroupMessage(chatId, payloads, messageId, "text")
+                messageManager.updateStatus(chatId, messageId, if (sent) MessageStatus.SENT else MessageStatus.FAILED)
+                return@withContext sent
+            }
+
             val encrypted = cryptoManager.encryptMessage(content, chatId)
 
-            val messageId = messageManager.saveOutgoingMessage(
+            messageId = messageManager.saveOutgoingMessage(
                 chatId = chatId,
                 content = text,
                 myId = myId,
@@ -249,7 +306,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 val messageContent = MessageContent(text = caption, attachments = attachments)
-                val encryptedPayload = cryptoManager.encryptMessage(messageContent, chatId)
+
+                // 🌟 Группа: шифруем контент для каждого участника, сохраняем контейнер
+                //    {payloads:[...]} — MediaUploadWorker определит формат и пошлёт group_message
+                val encryptedPayload: EncryptedPayload = if (isGroup) {
+                    val payloads = buildGroupPayloads(messageContent)
+                    EncryptedPayload(
+                        type = -1, // маркер: не настоящий ciphertext
+                        data = com.google.gson.Gson().toJson(mapOf("payloads" to payloads))
+                    )
+                } else {
+                    cryptoManager.encryptMessage(messageContent, chatId)
+                }
 
                 val messageType = when {
                     attachments.any { it.mediaType == "image/gif" } -> "gif"
@@ -424,7 +492,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refreshOnlineStatus() {
-        if (chatId.isEmpty()) return
+        if (chatId.isEmpty() || isGroup) return
         viewModelScope.launch {
             try {
                 val response = NetworkClient.apiService.getUserStatus(chatId)
@@ -459,6 +527,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun onUserTyping() {
+        if (isGroup) return // тайпинг в группах — Спринт 3 (нужен серверный broadcast)
         if (!SocketManager.isConnected()) return
         if (!typingStartSent) {
             SocketManager.sendTypingStart(chatId)

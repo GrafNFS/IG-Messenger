@@ -40,6 +40,9 @@ object MessageSyncer {
     ): Int = withContext(Dispatchers.IO) {
         var newCount = 0
         try {
+            // ✅ Догоняем только хвост: сервер вернёт сообщения ПОЗЖЕ последнего
+            //    локального (since = max timestamp в Room). Пустой чат → since = null →
+            //    полная история (правильно при первом входе/переустановке).
             val since = messageManager.getLastMessageTimestamp(chatId)
             val response = NetworkClient.apiService.getChatHistory(chatId, myId, since)
             if (!response.isSuccessful || response.body() == null) {
@@ -60,8 +63,29 @@ object MessageSyncer {
 
                 try {
                     val payloadJson = Gson().toJson(dto.payload)
-                    val payload = Gson().fromJson(payloadJson, EncryptedPayload::class.java)
-                    val messageContent = decryptWithLazyInit(cryptoManager, payload, senderId)
+
+                    // 🌟 Групповое сообщение: payload = { payloads: [{userId,type,data}...] }
+                    //    Сервер хранит контейнер целиком — выбираем СВОЙ entry.
+                    val payload: EncryptedPayload? = run {
+                        val obj = com.google.gson.JsonParser.parseString(payloadJson).asJsonObject
+                        if (obj.has("payloads")) {
+                            val arr = obj.getAsJsonArray("payloads")
+                            val entry = arr.firstOrNull {
+                                it.asJsonObject.get("userId")?.asString == myId
+                            }?.asJsonObject
+                            if (entry == null) {
+                                // Не наш entry (мы — отправитель, либо не адресат) — пропуск
+                                null
+                            } else {
+                                EncryptedPayload(entry.get("type").asInt, entry.get("data").asString)
+                            }
+                        } else {
+                            Gson().fromJson(payloadJson, EncryptedPayload::class.java)
+                        }
+                    } ?: continue
+
+                    // senderId в группе = отправитель; сессия с ним строится как обычно
+                    val messageContent = decryptWithLazyInit(cryptoManager, payload!!, senderId)
 
                     val attachments = messageContent.attachments
                     val messageType = when {
@@ -147,7 +171,7 @@ object MessageSyncer {
      * её по key bundle с сервера и повторяет попытку (важно после переустановки
      * приложения, когда Room-сессии пусты, а история на сервере есть).
      */
-    private suspend fun decryptWithLazyInit(
+    suspend fun decryptWithLazyInit(
         cryptoManager: MessageCryptoManager,
         payload: EncryptedPayload,
         senderId: String

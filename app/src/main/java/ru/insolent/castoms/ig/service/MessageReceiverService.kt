@@ -74,6 +74,11 @@ class MessageReceiverService : Service() {
             serviceScope.launch { handleIncomingMessage(from, payload, messageId, timestamp) }
         }
 
+        // 🌟 Групповые сообщения
+        SocketManager.onGroupMessage = { groupId, from, payload, messageId, timestamp ->
+            serviceScope.launch { handleGroupMessage(groupId, from, payload, messageId, timestamp) }
+        }
+
         // ✅ 2. Слушаем доставку
         SocketManager.onMessageDelivered = { messageId, deliveredBy ->
             serviceScope.launch {
@@ -258,6 +263,79 @@ class MessageReceiverService : Service() {
         }
     }
 
+    private suspend fun handleGroupMessage(groupId: String, from: String, payload: EncryptedPayload, messageId: String, timestamp: Long) {
+        try {
+            // Дешифруем entry отправителя (ленивая init сессии — как в догоне)
+            val messageContent = MessageSyncer.decryptWithLazyInit(cryptoManager, payload, from)
+            val attachments = messageContent.attachments
+
+            val messageType = when {
+                attachments?.any { it.mediaType.startsWith("audio") } == true -> "audio"
+                attachments?.any { it.mediaType == "image/gif" } == true -> "gif"
+                attachments?.any { it.mediaType.startsWith("video") } == true -> "video"
+                !attachments.isNullOrEmpty() -> "image"
+                else -> "text"
+            }
+
+            try {
+                messageManager.saveIncomingMessage(
+                    chatId = groupId, senderId = from, content = messageContent.text,
+                    timestamp = timestamp, messageId = messageId, messageType = messageType, attachments = attachments
+                )
+            } catch (e: Exception) {
+                Log.d(TAG, "Duplicate group message in DB, skip: $messageId")
+                return
+            }
+
+            attachments?.forEach { attachment ->
+                val fileId = attachment.fileId
+                if (!downloadingFiles.add(fileId)) return@forEach
+                serviceScope.launch {
+                    try {
+                        val localPath = messageManager.downloadAndDecryptMedia(
+                            context = this@MessageReceiverService, fileId = fileId,
+                            encryptedKeyBase64 = attachment.encryptedKey, mediaType = attachment.mediaType ?: "image/jpeg",
+                            fileName = attachment.fileName ?: "file", messageId = messageId, expectedFileSize = attachment.fileSize ?: 0L,
+                            onProgress = { progress ->
+                                serviceScope.launch {
+                                    try {
+                                        messageManager.updateAttachmentDownloadProgress(messageId, fileId, progress)
+                                    } catch (_: Exception) {}
+                                }
+                            }
+                        )
+                        if (localPath != null) {
+                            messageManager.updateAttachmentLocalPath(messageId, fileId, localPath)
+                            NetworkClient.apiService.deleteMedia(fileId)
+                        }
+                    } finally {
+                        downloadingFiles.remove(fileId)
+                    }
+                }
+            }
+
+            // Уведомление: имя группы + отправитель
+            if (ChatActivity.currentOpenChatId != groupId) {
+                val sender = messageManager.getContactById(from)
+                val senderName = (sender as? ru.insolent.castoms.ig.database.ContactEntity)?.displayName ?: "Участник"
+                val text = when {
+                    messageContent.text.isNotEmpty() -> "$senderName: ${messageContent.text}"
+                    messageType == "audio" -> "$senderName: 🎙️ Голосовое сообщение"
+                    messageType == "video" -> "$senderName: 🎥 Видео"
+                    messageType == "image" -> "$senderName: 📷 Фото"
+                    else -> "Новое сообщение в группе"
+                }
+                val group = messageManager.getContactById(groupId)
+                showNewMessageNotification(messageId, group, text, groupId)
+            }
+
+        } catch (e: org.signal.libsignal.protocol.DuplicateMessageException) {
+            Log.w(TAG, "Duplicate group message bypassed")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to process group message", e)
+        }
+    }
+
     private fun showNewMessageNotification(messageId: String, contact: Any?, messageText: String, senderId: String) {
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
@@ -301,5 +379,6 @@ class MessageReceiverService : Service() {
         SocketManager.onMessageRead = null
         SocketManager.onMessageAction = null
         SocketManager.onConnected = null
+        SocketManager.onGroupMessage = null
     }
 }

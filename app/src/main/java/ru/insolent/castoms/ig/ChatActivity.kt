@@ -30,12 +30,6 @@ import androidx.core.content.FileProvider
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.ItemTouchHelper
-import androidx.work.Constraints
-import androidx.work.Data
-import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
-import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -44,12 +38,9 @@ import kotlinx.coroutines.withContext
 import ru.insolent.castoms.ig.databinding.ActivityChatBinding
 import ru.insolent.castoms.ig.adapters.*
 import ru.insolent.castoms.ig.chat.ChatViewModel
-import ru.insolent.castoms.ig.crypto.*
 import ru.insolent.castoms.ig.database.*
 import ru.insolent.castoms.ig.database.AttachmentEntity
 import ru.insolent.castoms.ig.network.*
-import ru.insolent.castoms.ig.service.MediaUploadWorker
-import ru.insolent.castoms.ig.utils.*
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -61,6 +52,7 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
 
     private lateinit var binding: ActivityChatBinding
     private var contactId: String = ""
+    private var isGroup: Boolean = false
     private var contactName: String = ""
     private val viewModel: ChatViewModel by viewModels()
     private lateinit var messageAdapter: MessageAdapter
@@ -169,8 +161,6 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
 
     private var cameraPhotoUri: Uri? = null
     private var cameraVideoUri: Uri? = null
-
-    private var typingStartSent = false
     private var typingAnimator: android.animation.ValueAnimator? = null
     private var typingStopJob: Job? = null
     private var replyToMessageId: String? = null
@@ -187,6 +177,7 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
         contactId = intent.getStringExtra("EXTRA_CONTACT_ID") ?: ""
         contactName = intent.getStringExtra("EXTRA_CONTACT_NAME") ?: "Unknown"
         val avatarResId = intent.getIntExtra("EXTRA_CONTACT_AVATAR", R.drawable.ic_default_avatar)
+        isGroup = intent.getBooleanExtra("EXTRA_IS_GROUP", false)
 
         binding.tvContactName.text = contactName
         binding.ivContactAvatar.setImageResource(avatarResId)
@@ -196,7 +187,7 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
         binding.toolbar.setNavigationOnClickListener { finish() }
 
         myId = viewModel.myId
-        viewModel.setup(contactId, contactName ?: contactId)
+        viewModel.setup(contactId, contactName ?: contactId, isGroup)
         viewModel.bindSocket()
         messageAdapter = MessageAdapter()
 
@@ -367,8 +358,6 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
             }
             true
         }
-
-        //observeMessages()
 
         checkContactOnlineStatus()
 
@@ -700,15 +689,18 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
 
     private fun observeViewModel() {
         lifecycleScope.launch {
-            viewModel.messages.collect { messages ->
-                val layoutManager = binding.rvMessages.layoutManager as LinearLayoutManager
-                val oldCount = messageAdapter.itemCount
-                val wasNearBottom = layoutManager.findLastVisibleItemPosition() >= oldCount - 3
-                messageAdapter.submitList(messages)
-                binding.rvMessages.post {
-                    val newCount = messageAdapter.itemCount
-                    if (newCount > 0 && (wasNearBottom || oldCount == 0)) {
-                        binding.rvMessages.scrollToPosition(newCount - 1)
+            viewModel.peerOnline.collect { online ->
+                if (!isGroup) updateOnlineStatus(online ?: false)
+                viewModel.messages.collect { messages ->
+                    val layoutManager = binding.rvMessages.layoutManager as LinearLayoutManager
+                    val oldCount = messageAdapter.itemCount
+                    val wasNearBottom = layoutManager.findLastVisibleItemPosition() >= oldCount - 3
+                    messageAdapter.submitList(messages)
+                    binding.rvMessages.post {
+                        val newCount = messageAdapter.itemCount
+                        if (newCount > 0 && (wasNearBottom || oldCount == 0)) {
+                            binding.rvMessages.scrollToPosition(newCount - 1)
+                        }
                     }
                 }
             }
