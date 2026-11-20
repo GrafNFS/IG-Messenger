@@ -15,7 +15,7 @@ import ru.insolent.castoms.ig.adapters.ChatAdapter
 import ru.insolent.castoms.ig.database.ContactEntity
 import ru.insolent.castoms.ig.database.CryptoDatabase
 import ru.insolent.castoms.ig.databinding.FragmentChatsBinding
-import ru.insolent.castoms.ig.groups.CreateGroupActivity
+import ru.insolent.castoms.ig.groups.NewChatActivity
 import ru.insolent.castoms.ig.utils.GroupManager
 import ru.insolent.castoms.ig.utils.MessageManager
 
@@ -61,7 +61,7 @@ class ChatsFragment : Fragment() {
 
         binding.fabNewChat.setOnClickListener {
             // 🌟 FAB пока ведёт на создание группы
-            startActivity(Intent(requireContext(), CreateGroupActivity::class.java))
+            startActivity(Intent(requireContext(), NewChatActivity::class.java))
         }
     }
 

@@ -373,7 +373,7 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
                 val messageText = binding.etMessageInput.text.toString().trim()
                 if (messageText.isNotEmpty()) {
                     lifecycleScope.launch {
-                        if (viewModel.sendEdit(editingMessageId, messageText)) {
+                        if (viewModel.sendEdit(editingMessageId!!, messageText)) {
                             binding.etMessageInput.setText("")
                             cancelEditing()
                         }

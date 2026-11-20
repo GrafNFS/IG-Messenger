@@ -208,12 +208,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    suspend fun sendEdit(messageId: String?, text: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun sendEdit(messageId: String, text: String): Boolean = withContext(Dispatchers.IO) {
         try {
             val actionContent = MessageContent(text = text, action = "edit", targetMessageId = messageId)
             val encrypted = cryptoManager.encryptMessage(actionContent, chatId)
             SocketManager.sendMessageAction(chatId, encrypted, messageId)
-            messageManager.updateMessageText(messageId!!, text)
+            messageManager.updateMessageText(messageId, text)
             true
         } catch (e: Exception) {
             Log.e(TAG, "sendEdit failed", e)

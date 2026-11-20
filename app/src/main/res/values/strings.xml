@@ -6,10 +6,12 @@
     <string name="nav_chats">Чаты</string>
     <string name="nav_contacts">Контакты</string>
     <string name="nav_settings">Настройки</string>
+    <string name="nav_new_chat">Новое сообщение</string>
 
     <!-- Поиск -->
     <string name="search_messages">Поиск чатов</string>
     <string name="search_contacts">Поиск по имени или username</string>
+    <string name="search_new_contacts">Поиск контактов</string>
 
     <!-- Чат -->
     <string name="type_message">Сообщение…</string>

@@ -47,16 +47,4 @@ class MainActivity : AppCompatActivity() {
             .replace(R.id.fragmentContainer, fragment)
             .commit()
     }
-
-    // Правильная обработка кнопки "Назад"
-    /*override fun onBackPressed() {
-        val currentFragment = supportFragmentManager.findFragmentById(R.id.fragmentContainer)
-        if (currentFragment !is ChatsFragment) {
-            // Если мы не на вкладке "Чаты" — переключаемся на неё
-            binding.bottomNavigation.selectedItemId = R.id.nav_chats
-        } else {
-            // Если уже на "Чатах" — выходим из приложения
-            super.onBackPressed()
-        }
-    }*/
 }
