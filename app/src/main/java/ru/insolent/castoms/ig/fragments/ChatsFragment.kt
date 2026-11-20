@@ -72,7 +72,7 @@ class ChatsFragment : Fragment() {
             val contact = messageManager.getContactById(chatId) as? ContactEntity
             val intent = Intent(context, ChatActivity::class.java)
             intent.putExtra("EXTRA_CONTACT_ID", chatId)
-            intent.putExtra("EXTRA_NAME", contact?.displayName ?: contact?.username ?: "Собеседник")
+            intent.putExtra("EXTRA_CONTACT_NAME", contact?.displayName ?: contact?.username ?: "Собеседник")
             intent.putExtra("EXTRA_IS_GROUP", contact?.isGroup ?: false)   // 🌟
             startActivity(intent)
         }
