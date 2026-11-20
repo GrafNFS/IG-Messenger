@@ -88,7 +88,7 @@ interface CryptoDao {
         UserProfileEntity::class,
         SignalRecord::class
     ],
-    version = 5  // ✅ isGroup у контактов (групповые чаты)
+    version = 6  // ✅ senderName в messages (имена в группах)
 )
 abstract class CryptoDatabase : RoomDatabase() {
     abstract fun cryptoDao(): CryptoDao
@@ -107,7 +107,7 @@ abstract class CryptoDatabase : RoomDatabase() {
                     CryptoDatabase::class.java,
                     "crypto_store"
                 )
-                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .build().also { INSTANCE = it }
             }
         }

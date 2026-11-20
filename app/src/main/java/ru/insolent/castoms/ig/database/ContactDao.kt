@@ -15,4 +15,7 @@ interface ContactDao {
     // Получение всех контактов (для экрана контактов)
     @Query("SELECT * FROM contacts ORDER BY displayName COLLATE NOCASE ASC")
     suspend fun getAllContacts(): List<ContactEntity>
+
+    @Query("DELETE FROM contacts WHERE id = :id")
+    suspend fun deleteById(id: String)
 }

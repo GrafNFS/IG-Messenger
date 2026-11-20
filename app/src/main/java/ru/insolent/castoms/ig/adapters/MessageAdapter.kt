@@ -220,6 +220,8 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         val tvAudioDuration: TextView = view.findViewById(R.id.tvAudioDuration)
         // 🌟 Прогресс скачивания/загрузки аудио (безопасно: null, пока нет в layout)
         val pbAudioProgress: android.widget.ProgressBar? = view.findViewById(R.id.pbAudioProgress)
+        // 🌟 Имя отправителя — только входящие в группах (null-safe, пока нет в layout)
+        val tvSenderName: TextView? = view.findViewById(R.id.tvSenderName)
     }
 
     class DateHeaderViewHolder(view: View) : RecyclerView.ViewHolder(view) {
@@ -251,6 +253,30 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
             val attachments = item.attachments
             val context = rawHolder.itemView.context
 
+            // 🌟 Системное сообщение («X добавил Y»): серый текст по центру, без пузыря
+            if (message.messageType == "system") {
+                rawHolder.messageContainer.setBackgroundResource(android.R.color.transparent)
+                rawHolder.tvText.visibility = View.VISIBLE
+                rawHolder.tvText.text = message.content
+                rawHolder.tvText.setTextColor(ContextCompat.getColor(context, android.R.color.darker_gray))
+                rawHolder.tvTime.visibility = View.GONE
+                rawHolder.ivStatus.visibility = View.GONE
+                rawHolder.audioContainer.visibility = View.GONE
+                rawHolder.rvMessageImages.visibility = View.GONE
+                rawHolder.quoteContainer.visibility = View.GONE
+                rawHolder.linkPreviewContainer.visibility = View.GONE
+                rawHolder.tvSenderName?.visibility = View.GONE
+                rawHolder.pbAudioProgress?.visibility = View.GONE
+
+                val sysParams = rawHolder.messageContainer.layoutParams as ConstraintLayout.LayoutParams
+                sysParams.startToStart = ConstraintLayout.LayoutParams.PARENT_ID
+                sysParams.endToEnd = ConstraintLayout.LayoutParams.PARENT_ID
+                sysParams.horizontalBias = 0.5f
+                rawHolder.messageContainer.layoutParams = sysParams
+                rawHolder.messageContainer.setOnClickListener(null)
+                return
+            }
+
             if (message.content.isNotEmpty()) {
                 rawHolder.tvText.visibility = View.VISIBLE
                 rawHolder.tvText.text = message.content
@@ -273,6 +299,16 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
             } else {
                 rawHolder.tvText.visibility = View.GONE
             }
+            // 🌟 Имя отправителя над сообщением (входящие в группах)
+            rawHolder.tvSenderName?.let { tv ->
+                if (message.isIncoming && !message.senderName.isNullOrEmpty()) {
+                    tv.visibility = View.VISIBLE
+                    tv.text = message.senderName
+                } else {
+                    tv.visibility = View.GONE
+                }
+            }
+
             rawHolder.tvTime.text = formatTimestamp(message.timestamp)
 
             rawHolder.audioContainer.visibility = View.GONE

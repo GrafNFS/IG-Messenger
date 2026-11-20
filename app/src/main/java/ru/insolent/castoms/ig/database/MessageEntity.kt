@@ -1,7 +1,6 @@
 package ru.insolent.castoms.ig.database
 
 import androidx.room.*
-import ru.insolent.castoms.ig.crypto.MediaAttachment
 
 @Entity(
     tableName = "messages",
@@ -33,7 +32,11 @@ data class MessageEntity(
     // 🌟 НОВЫЕ ПОЛЯ ДЛЯ ПРЕВЬЮ ССЫЛОК
     @ColumnInfo(name = "linkTitle") val linkTitle: String? = null,
     @ColumnInfo(name = "linkDescription") val linkDescription: String? = null,
-    @ColumnInfo(name = "linkImageUrl") val linkImageUrl: String? = null
+    @ColumnInfo(name = "linkImageUrl") val linkImageUrl: String? = null,
+
+    // 🌟 Имя отправителя — заполняется для ВХОДЯЩИХ сообщений в ГРУППАХ
+    //    (null в личных чатах — имя там и так понятно)
+    @ColumnInfo(name = "senderName") val senderName: String? = null
 )
 
 // Статусы сообщения

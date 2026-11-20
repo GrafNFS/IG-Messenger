@@ -44,6 +44,12 @@ object SocketManager {
     // 🌟 Групповые сообщения: сервер присылает ЕГО entry (уже выбран по userId)
     var onGroupMessage: ((groupId: String, from: String, payload: EncryptedPayload, messageId: String, timestamp: Long) -> Unit)? = null
 
+    // 🌟 Тайпинг в группах
+    var onGroupTyping: ((groupId: String, userId: String, isTyping: Boolean) -> Unit)? = null
+
+    // 🌟 Системные сообщения группы («X добавил Y») — не шифруются
+    var onSystemMessage: ((groupId: String, messageId: String, text: String, timestamp: Long) -> Unit)? = null
+
     /**
      * Инициализация контекстом приложения. Вызывать ОДИН РАЗ до connect().
      */
@@ -136,6 +142,25 @@ object SocketManager {
                 )
                 Log.d(TAG, "👥 Group message in $groupId from $from, msgId: $messageId")
                 onGroupMessage?.invoke(groupId, from, encrypted, messageId, timestamp)
+            }
+
+            socket?.on("system_message") { args ->
+                val data = args[0] as JSONObject
+                onSystemMessage?.invoke(
+                    data.getString("groupId"),
+                    data.optString("messageId", ""),
+                    data.getString("text"),
+                    data.optLong("timestamp", System.currentTimeMillis())
+                )
+            }
+
+            socket?.on("group_typing") { args ->
+                val data = args[0] as JSONObject
+                onGroupTyping?.invoke(
+                    data.getString("groupId"),
+                    data.getString("userId"),
+                    data.getBoolean("isTyping")
+                )
             }
 
             socket?.on("message_delivered") { args ->
@@ -246,7 +271,7 @@ object SocketManager {
     }
 
     /** Группа: payloads — зашифровано ОТДЕЛЬНО для каждого участника (pairwise) */
-    fun sendGroupMessage(groupId: String, payloads: List<GroupPayload>, messageId: String, typeMsg: String): Boolean {
+    fun sendGroupMessage(groupId: String, payloads: List<ru.insolent.castoms.ig.network.GroupPayload>, messageId: String, typeMsg: String): Boolean {
         if (socket?.connected() != true) return false
 
         val arr = org.json.JSONArray()
@@ -265,6 +290,12 @@ object SocketManager {
         }
         socket?.emit("group_message", data)
         Log.d(TAG, "👤➡️👥 Sent group message $messageId to $groupId (${payloads.size} recipients)")
+        return true
+    }
+
+    fun sendGroupTyping(groupId: String, isTyping: Boolean): Boolean {
+        if (socket?.connected() != true) return false
+        socket?.emit("group_typing", JSONObject().put("groupId", groupId).put("isTyping", isTyping))
         return true
     }
 

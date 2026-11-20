@@ -117,7 +117,8 @@ class MessageManager(private val context: Context) {
         replyToSenderName: String? = null,
         replyToContent: String? = null,
         messageType: String = "text",
-        attachments: List<MediaAttachment>? = null // ✅ Принимает список вложений
+        attachments: List<MediaAttachment>? = null, // ✅ Принимает список вложений
+        senderName: String? = null
     ): String {
 
         val foundUrl = LinkPreviewHelper.extractUrl(content)
@@ -150,7 +151,8 @@ class MessageManager(private val context: Context) {
             messageType = messageType,
             linkTitle = title,
             linkDescription = description,
-            linkImageUrl = imageUrl
+            linkImageUrl = imageUrl,
+            senderName = senderName
         )
         dao.insertMessage(message)
 
@@ -365,6 +367,10 @@ class MessageManager(private val context: Context) {
 
     suspend fun getContactById(senderId: String): ContactEntity? {
         return contactDao.getContactById(senderId)
+    }
+
+    suspend fun deleteContact(id: String) {
+        contactDao.deleteById(id) //— подставь существующий метод своего ContactDao
     }
 
     fun getConversations(): Flow<List<Conversation>> {

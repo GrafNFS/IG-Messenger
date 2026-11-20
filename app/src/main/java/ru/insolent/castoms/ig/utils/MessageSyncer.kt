@@ -61,14 +61,34 @@ object MessageSyncer {
                 //    иначе сессия бросает DuplicateMessageException (old counter)
                 if (messageManager.getMessageById(messageId) != null) continue
 
+                // 🌟 Системное сообщение: { system: true, text } — не шифруется
+                val payloadObj0 = try {
+                    com.google.gson.JsonParser.parseString(Gson().toJson(dto.payload)).asJsonObject
+                } catch (e: Exception) { null }
+
+                if (payloadObj0 != null && payloadObj0.has("system")) {
+                    val sysText = payloadObj0.get("text").asString
+                    try {
+                        messageManager.saveIncomingMessage(
+                            chatId = chatId, senderId = dto.senderId, content = sysText,
+                            timestamp = dto.timestamp, messageId = messageId,
+                            messageType = "system", attachments = null
+                        )
+                        newCount++
+                    } catch (e: Exception) { /* дубликат */ }
+                    continue
+                }
+
                 try {
                     val payloadJson = Gson().toJson(dto.payload)
 
                     // 🌟 Групповое сообщение: payload = { payloads: [{userId,type,data}...] }
                     //    Сервер хранит контейнер целиком — выбираем СВОЙ entry.
+                    var isGroupMsg = false
                     val payload: EncryptedPayload? = run {
                         val obj = com.google.gson.JsonParser.parseString(payloadJson).asJsonObject
                         if (obj.has("payloads")) {
+                            isGroupMsg = true
                             val arr = obj.getAsJsonArray("payloads")
                             val entry = arr.firstOrNull {
                                 it.asJsonObject.get("userId")?.asString == myId
@@ -97,14 +117,17 @@ object MessageSyncer {
                     }
 
                     try {
+                        // ✅ chatId = чат, который догоняем (для групп это groupId,
+                        //    НЕ senderId — иначе сообщение легло бы в чат отправителя)
                         messageManager.saveIncomingMessage(
-                            chatId = senderId,
+                            chatId = chatId,
                             senderId = senderId,
                             content = messageContent.text,
                             timestamp = dto.timestamp,
                             messageId = messageId,
                             messageType = messageType,
-                            attachments = attachments
+                            attachments = attachments,
+                            senderName = if (isGroupMsg) resolveSenderName(senderId, messageManager) else null
                         )
                         newCount++
                     } catch (e: Exception) {
@@ -171,6 +194,12 @@ object MessageSyncer {
      * её по key bundle с сервера и повторяет попытку (важно после переустановки
      * приложения, когда Room-сессии пусты, а история на сервере есть).
      */
+    /** Имя отправителя из локальных контактов */
+    private suspend fun resolveSenderName(userId: String, messageManager: MessageManager): String? {
+        val c = messageManager.getContactById(userId) as? ru.insolent.castoms.ig.database.ContactEntity
+        return c?.displayName ?: c?.username
+    }
+
     suspend fun decryptWithLazyInit(
         cryptoManager: MessageCryptoManager,
         payload: EncryptedPayload,

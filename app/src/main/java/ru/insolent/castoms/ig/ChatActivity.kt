@@ -40,6 +40,7 @@ import ru.insolent.castoms.ig.adapters.*
 import ru.insolent.castoms.ig.chat.ChatViewModel
 import ru.insolent.castoms.ig.database.*
 import ru.insolent.castoms.ig.database.AttachmentEntity
+import ru.insolent.castoms.ig.groups.GroupInfoActivity
 import ru.insolent.castoms.ig.network.*
 import java.io.File
 import java.io.FileOutputStream
@@ -190,6 +191,14 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
         viewModel.setup(contactId, contactName ?: contactId, isGroup)
         viewModel.bindSocket()
         messageAdapter = MessageAdapter()
+
+        // Тап по имени/аватару в группе → инфо о группе
+        binding.toolbar.setOnClickListener {
+            if (isGroup) {
+                startActivity(Intent(this, GroupInfoActivity::class.java)
+                    .putExtra("EXTRA_GROUP_ID", contactId))
+            }
+        }
 
         messageAdapter.setQuoteClickListener { replyToMessageId ->
             scrollToMessage(replyToMessageId)
@@ -688,6 +697,17 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
     }
 
     private fun observeViewModel() {
+        lifecycleScope.launch {
+            viewModel.groupTypingNames.collect { names ->
+                if (isGroup) {
+                    binding.tvStatus.text = when {
+                        names.isEmpty() -> "Группа"
+                        names.size == 1 -> "${names[0]} печатает..."
+                        else -> names.take(2).joinToString(", ") + " печатают..."
+                    }
+                }
+            }
+        }
         lifecycleScope.launch {
             viewModel.peerOnline.collect { online ->
                 if (!isGroup) updateOnlineStatus(online ?: false)

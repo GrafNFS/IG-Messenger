@@ -99,6 +99,7 @@ interface ApiService {
     @GET("api/chats")
     suspend fun getMyChats(): Response<List<String>>
 
+    /** Группы создание информация  **/
     @POST("api/groups")
     suspend fun createGroup(@Body request: CreateGroupRequest): Response<GroupResponse>
 
@@ -107,6 +108,18 @@ interface ApiService {
 
     @GET("api/groups/{groupId}/members")
     suspend fun getGroupMembers(@Path("groupId") groupId: String): Response<List<GroupMemberDto>>
+
+    @POST("api/groups/{groupId}/members")
+    suspend fun addGroupMember(
+        @Path("groupId") groupId: String,
+        @Body body: Map<String, String>
+    ): Response<Any>
+
+    @DELETE("api/groups/{groupId}/members/{userId}")
+    suspend fun removeGroupMember(
+        @Path("groupId") groupId: String,
+        @Path("userId") userId: String
+    ): Response<Any>
 }
 
 // === МОДЕЛИ ДАННЫХ ===

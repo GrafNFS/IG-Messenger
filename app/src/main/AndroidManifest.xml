@@ -26,6 +26,12 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.IGMessenger">
         <activity
+            android:name=".groups.AddMembersActivity"
+            android:exported="false" />
+        <activity
+            android:name=".groups.GroupInfoActivity"
+            android:exported="false" />
+        <activity
             android:name=".groups.NewChatActivity"
             android:exported="false"
             android:parentActivityName=".MainActivity" />

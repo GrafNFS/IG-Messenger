@@ -79,6 +79,11 @@ class MessageReceiverService : Service() {
             serviceScope.launch { handleGroupMessage(groupId, from, payload, messageId, timestamp) }
         }
 
+        // 🌟 Системные сообщения групп
+        SocketManager.onSystemMessage = { groupId, messageId, text, timestamp ->
+            serviceScope.launch { handleSystemMessage(groupId, messageId, text, timestamp) }
+        }
+
         // ✅ 2. Слушаем доставку
         SocketManager.onMessageDelivered = { messageId, deliveredBy ->
             serviceScope.launch {
@@ -263,6 +268,29 @@ class MessageReceiverService : Service() {
         }
     }
 
+    /** Имя отправителя из локальных контактов (участники групп сохранены GroupManager'ом) */
+    private suspend fun resolveSenderName(userId: String): String? {
+        val c = messageManager.getContactById(userId) as? ru.insolent.castoms.ig.database.ContactEntity
+        return c?.displayName ?: c?.username
+    }
+
+    /** Системное сообщение («X добавил Y») — сохраняем как есть, без дешифровки */
+    private suspend fun handleSystemMessage(groupId: String, messageId: String, text: String, timestamp: Long) {
+        try {
+            try {
+                messageManager.saveIncomingMessage(
+                    chatId = groupId, senderId = "system", content = text,
+                    timestamp = timestamp, messageId = messageId,
+                    messageType = "system", attachments = null
+                )
+            } catch (e: Exception) {
+                Log.d(TAG, "Duplicate system message, skip: $messageId")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to save system message", e)
+        }
+    }
+
     private suspend fun handleGroupMessage(groupId: String, from: String, payload: EncryptedPayload, messageId: String, timestamp: Long) {
         try {
             // Дешифруем entry отправителя (ленивая init сессии — как в догоне)
@@ -280,7 +308,9 @@ class MessageReceiverService : Service() {
             try {
                 messageManager.saveIncomingMessage(
                     chatId = groupId, senderId = from, content = messageContent.text,
-                    timestamp = timestamp, messageId = messageId, messageType = messageType, attachments = attachments
+                    timestamp = timestamp, messageId = messageId, messageType = messageType,
+                    attachments = attachments,
+                    senderName = resolveSenderName(from)   // 🌟 имя над сообщением
                 )
             } catch (e: Exception) {
                 Log.d(TAG, "Duplicate group message in DB, skip: $messageId")
@@ -380,5 +410,6 @@ class MessageReceiverService : Service() {
         SocketManager.onMessageAction = null
         SocketManager.onConnected = null
         SocketManager.onGroupMessage = null
+        SocketManager.onSystemMessage = null
     }
 }

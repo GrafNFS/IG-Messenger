@@ -28,6 +28,7 @@ class GroupManager(private val context: Context) {
             if (!resp.isSuccessful || resp.body() == null) return@withContext emptyList()
 
             val groups = resp.body()!!
+            membersCache.clear()
             for (g in groups) {
                 // Псевдо-контакт группы
                 messageManager.saveContact(
@@ -37,7 +38,7 @@ class GroupManager(private val context: Context) {
                 // Участники — как обычные контакты (нужны для сессий/ключей и имён)
                 for (m in g.members) {
                     messageManager.saveContact(
-                        id = m.userId, username = m.username!!,
+                        id = m.userId, username = m.username ?: m.userId,
                         displayName = m.displayName, isOnline = false, isGroup = false
                     )
                 }
@@ -59,7 +60,7 @@ class GroupManager(private val context: Context) {
             val members = resp.body()!!
             for (m in members) {
                 messageManager.saveContact(
-                    id = m.userId, username = m.username!!,
+                    id = m.userId, username = m.username ?: m.userId,
                     displayName = m.displayName, isOnline = false, isGroup = false
                 )
             }
@@ -83,6 +84,39 @@ class GroupManager(private val context: Context) {
             } catch (e: Exception) {
                 Log.e(TAG, "createGroup failed", e)
                 null
+            }
+        }
+
+    /** Добавить участников (только OWNER; сервер проверит) */
+    suspend fun addMembers(groupId: String, userIds: List<String>): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                var allOk = true
+                for (uid in userIds) {
+                    val resp = NetworkClient.apiService.addGroupMember(groupId, mapOf("userId" to uid))
+                    if (!resp.isSuccessful) allOk = false
+                }
+                refreshMyGroups() // обновить кэш + контакты новых участников
+                allOk
+            } catch (e: Exception) {
+                Log.e(TAG, "addMembers failed", e)
+                false
+            }
+        }
+
+    /** Выйти из группы (не-OWNER). Локально удаляем псевдо-контакт — чат исчезнет из списка */
+    suspend fun leaveGroup(groupId: String, myId: String): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                val resp = NetworkClient.apiService.removeGroupMember(groupId, myId)
+                if (resp.isSuccessful) {
+                    messageManager.deleteContact(groupId)
+                    membersCache.remove(groupId)
+                    true
+                } else false
+            } catch (e: Exception) {
+                Log.e(TAG, "leaveGroup failed", e)
+                false
             }
         }
 
