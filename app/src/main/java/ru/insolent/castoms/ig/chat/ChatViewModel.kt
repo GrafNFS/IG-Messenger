@@ -244,8 +244,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     suspend fun retryMessage(message: MessageEntity) = withContext(Dispatchers.IO) {
         try {
-            val payload = Gson().fromJson(message.encryptedPayload, EncryptedPayload::class.java)
-            val sent = SocketManager.sendEncryptedMessage(chatId, payload, message.messageId, "text")
+            // 🌟 Групповой контейнер {payloads:[...]} — шлём через group_message
+            val groupPayloads = parseGroupPayloads(message.encryptedPayload)
+            val sent = if (groupPayloads != null) {
+                SocketManager.sendGroupMessage(chatId, groupPayloads, message.messageId, "text")
+            } else {
+                val payload = Gson().fromJson(message.encryptedPayload, EncryptedPayload::class.java)
+                SocketManager.sendEncryptedMessage(chatId, payload, message.messageId, "text")
+            }
             messageManager.updateStatus(chatId, message.messageId, if (sent) MessageStatus.SENT else MessageStatus.FAILED)
         } catch (e: Exception) {
             Log.e(TAG, "retryMessage failed", e)
@@ -404,7 +410,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             )
 
             val messageContent = MessageContent(text = "", attachments = listOf(attachment))
-            val encryptedPayload = cryptoManager.encryptMessage(messageContent, chatId)
+
+            // 🌟 Группа: шифруем для каждого участника, сохраняем контейнер (type=-1).
+            //    MediaUploadWorker распознает формат и пошлёт group_message.
+            val encryptedPayload: EncryptedPayload = if (isGroup) {
+                val payloads = buildGroupPayloads(messageContent)
+                EncryptedPayload(
+                    type = -1,
+                    data = com.google.gson.Gson().toJson(mapOf("payloads" to payloads))
+                )
+            } else {
+                cryptoManager.encryptMessage(messageContent, chatId)
+            }
 
             messageManager.saveOutgoingMessage(
                 chatId = chatId,

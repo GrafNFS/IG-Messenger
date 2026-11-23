@@ -3,6 +3,7 @@ package ru.insolent.castoms.ig.groups
 import android.content.Intent
 import android.os.Bundle
 import android.view.LayoutInflater
+import android.view.View
 import android.view.ViewGroup
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -85,9 +86,8 @@ class GroupInfoActivity : AppCompatActivity() {
 
             // OWNER может добавлять участников и не может выйти (сервер тоже отвергнет)
             binding.btnAddMembers.visibility =
-                if (myRole == "OWNER") android.view.View.VISIBLE else android.view.View.GONE
-            binding.btnLeave.visibility =
-                if (myRole == "OWNER") android.view.View.GONE else android.view.View.VISIBLE
+                if (myRole == "OWNER") View.VISIBLE else View.GONE
+            binding.btnLeave.visibility = View.VISIBLE
         }
     }
 
