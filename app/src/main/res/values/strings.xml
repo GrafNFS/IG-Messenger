@@ -10,6 +10,7 @@
     <string name="nav_info_chat">Информация о группе</string>
     <string name="nav_add_members_chat">Добавить учасника</string>
     <string name="nav_create_grup_chat">Создать группу</string>
+    <string name="nav_verivity_chat">Верификация собеседника</string>
 
     <!-- Поиск -->
     <string name="search_messages">Поиск чатов</string>

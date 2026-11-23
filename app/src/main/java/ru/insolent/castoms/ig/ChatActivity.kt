@@ -191,10 +191,14 @@ class ChatActivity : AppCompatActivity(), MessageAdapter.OnMediaClickListener {
         messageAdapter = MessageAdapter()
 
         // Тап по имени/аватару в группе → инфо о группе
-        binding.toolbar.setOnClickListener {
+        binding.tvContactName.setOnClickListener {
             if (isGroup) {
                 startActivity(Intent(this, GroupInfoActivity::class.java)
                     .putExtra("EXTRA_GROUP_ID", contactId))
+            } else {
+                startActivity(Intent(this, SafetyNumberActivity::class.java)
+                    .putExtra("EXTRA_CONTACT_ID", contactId)
+                    .putExtra("EXTRA_NAME", contactName))
             }
         }
 

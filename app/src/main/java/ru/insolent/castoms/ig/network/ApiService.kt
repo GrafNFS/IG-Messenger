@@ -22,6 +22,9 @@ interface ApiService {
     @POST("api/keys/upload")
     suspend fun uploadKeys(@Body request: KeysUploadRequest): Response<KeysUploadResponse>
 
+    @GET("api/keys/{userId}/identity")
+    suspend fun getIdentityKey(@Path("userId") userId: String): Response<IdentityKeyResponse>
+
     @GET("api/keys/{userId}")
     suspend fun getKeysBundle(@Path("userId") userId: String): Response<KeysBundle>
 
@@ -131,7 +134,15 @@ interface ApiService {
 
 // === МОДЕЛИ ДАННЫХ ===
 
-data class UploadResponse(val fileId: String? = null, val size: Long? = null)
+data class UploadResponse(
+    val fileId: String? = null,
+    val size: Long? = null
+)
+
+data class IdentityKeyResponse(
+    val identityKey: String? = null
+)
+
 @Keep
 data class UserDto(
     @SerializedName("id")

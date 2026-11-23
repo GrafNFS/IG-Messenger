@@ -26,6 +26,9 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.IGMessenger">
         <activity
+            android:name=".SafetyNumberActivity"
+            android:exported="false" />
+        <activity
             android:name=".groups.AddMembersActivity"
             android:exported="false" />
         <activity
