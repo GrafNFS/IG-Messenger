@@ -1,5 +1,4 @@
-package ru.insolent.castoms.ig.service
-
+package ru.insolent.castoms.ig.workers
 import android.content.Context
 import android.util.Log
 import androidx.work.CoroutineWorker
@@ -58,13 +57,19 @@ class MediaUploadWorker(
             return Result.failure()
         }
 
-        // 🌟 Групповое сообщение: encryptedPayload = {payloads:[{userId,type,data}...]}
-        //    (маркер type=-1). Отправляем через group_message вместо private_message.
+        // 🌟 Групповое сообщение. MessageManager хранит EncryptedPayload как JSON:
+        //    {"type":-1,"data":"{payloads:[...]}"} — распознаём обе формы, шлём group_message.
         val gson = com.google.gson.Gson()
         val groupPayloads: List<ru.insolent.castoms.ig.network.GroupPayload>? = try {
             val obj = com.google.gson.JsonParser.parseString(encryptedPayloadJson).asJsonObject
-            if (obj.has("payloads")) {
-                obj.getAsJsonArray("payloads").map {
+            val target = when {
+                obj.has("payloads") -> obj
+                obj.has("data") && obj.get("type")?.asInt == -1 ->
+                    com.google.gson.JsonParser.parseString(obj.get("data").asString).asJsonObject
+                else -> null
+            }
+            if (target != null && target.has("payloads")) {
+                target.getAsJsonArray("payloads").map {
                     val e = it.asJsonObject
                     ru.insolent.castoms.ig.network.GroupPayload(
                         e.get("userId").asString, e.get("type").asInt, e.get("data").asString

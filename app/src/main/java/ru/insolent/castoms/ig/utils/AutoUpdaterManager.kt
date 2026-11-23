@@ -1,18 +1,11 @@
 package ru.insolent.castoms.ig.utils
 
-import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
-import android.database.Cursor
 import android.net.Uri
-import android.os.Environment
 import android.util.Log
 import androidx.core.content.FileProvider
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import ru.insolent.castoms.ig.model.AppCheckVersion
 import ru.insolent.castoms.ig.network.NetworkClient
 import java.io.File

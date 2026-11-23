@@ -29,6 +29,10 @@ class CreateGroupActivity : AppCompatActivity() {
         binding = ActivityCreateGroupBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        setSupportActionBar(binding.toolbar)
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        binding.toolbar.setNavigationOnClickListener { finish() }
+
         pickerAdapter = GroupMemberPickerAdapter()
         binding.listMembers.layoutManager = LinearLayoutManager(this)
         binding.listMembers.adapter = pickerAdapter

@@ -39,6 +39,8 @@ class NewChatActivity : AppCompatActivity() {
             startActivity(Intent(this, CreateGroupActivity::class.java))
         }
 
+        binding.listContacts.divider = null
+
         binding.listContacts.setOnItemClickListener { _, _, position, _ ->
             val adapter = binding.listContacts.adapter as ArrayAdapter<String>
             val name = adapter.getItem(position) ?: return@setOnItemClickListener

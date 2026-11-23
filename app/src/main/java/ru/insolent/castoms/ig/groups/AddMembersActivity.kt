@@ -28,6 +28,10 @@ class AddMembersActivity : AppCompatActivity() {
         binding = ActivityAddMembersBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        setSupportActionBar(binding.toolbar)
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        binding.toolbar.setNavigationOnClickListener { finish() }
+
         groupId = intent.getStringExtra("EXTRA_GROUP_ID") ?: run { finish(); return }
         groupManager = GroupManager(this)
 

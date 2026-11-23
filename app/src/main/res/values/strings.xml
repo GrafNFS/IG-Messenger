@@ -7,6 +7,9 @@
     <string name="nav_contacts">Контакты</string>
     <string name="nav_settings">Настройки</string>
     <string name="nav_new_chat">Новое сообщение</string>
+    <string name="nav_info_chat">Информация о группе</string>
+    <string name="nav_add_members_chat">Добавить учасника</string>
+    <string name="nav_create_grup_chat">Создать группу</string>
 
     <!-- Поиск -->
     <string name="search_messages">Поиск чатов</string>

@@ -24,3 +24,45 @@
 -dontwarn linc.com.amplituda.AmplitudaProcessingOutput
 -dontwarn linc.com.amplituda.AmplitudaResult
 -dontwarn linc.com.amplituda.callback.AmplitudaErrorListener
+# --- Kotlin / общее ---
+-keepattributes Signature
+-keepattributes *Annotation*
+-keepattributes EnclosingMethod
+-keepattributes InnerClasses
+
+# --- Gson: критично ---
+-keep class com.google.gson.** { *; }
+-dontwarn com.google.gson.**
+
+# ВСЕ модели, которые Gson сериализует/десериализует:
+# DTO сети (AuthResponse, KeysUploadRequest, KeysBundle, GroupResponse...) +
+# крипто-обёртки (EncryptedPayload/MessageContent/MediaAttachment ходят
+# в JSON внутри Room и сокетов) + Room-сущности.
+-keep class ru.insolent.castoms.ig.network.** { *; }
+-keep class ru.insolent.castoms.ig.crypto.** { *; }
+-keep class ru.insolent.castoms.ig.database.** { *; }
+
+# --- Retrofit ---
+-dontwarn retrofit2.**
+-keepclasseswithmembers class * {
+    @retrofit2.http.* <methods>;
+}
+
+# --- OkHttp / Okio ---
+-dontwarn okhttp3.**
+-dontwarn okio.**
+-dontwarn javax.annotation.**
+
+# --- Socket.IO ---
+-keep class io.socket.** { *; }
+-dontwarn io.socket.**
+
+# --- libsignal (Signal Protocol) ---
+-keep class org.signal.** { *; }
+-dontwarn org.signal.**
+
+# --- Прочие библиотеки (безопасно) ---
+-dontwarn com.google.android.exoplayer2.**
+-dontwarn com.squareup.picasso.**
+-dontwarn com.masoudss.**
+-dontwarn com.linc.amplituda.**

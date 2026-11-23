@@ -1,7 +1,6 @@
 package ru.insolent.castoms.ig
 
 import android.Manifest
-import android.R.id.progress
 import android.animation.ObjectAnimator
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -22,7 +21,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
-import com.google.android.material.progressindicator.LinearProgressIndicator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext

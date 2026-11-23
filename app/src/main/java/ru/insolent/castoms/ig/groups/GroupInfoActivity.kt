@@ -31,6 +31,10 @@ class GroupInfoActivity : AppCompatActivity() {
         binding = ActivityGroupInfoBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        setSupportActionBar(binding.toolbar)
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        binding.toolbar.setNavigationOnClickListener { finish() }
+
         groupId = intent.getStringExtra("EXTRA_GROUP_ID") ?: run { finish(); return }
         myId = SessionManager(this).getUserId() ?: ""
         groupManager = GroupManager(this)

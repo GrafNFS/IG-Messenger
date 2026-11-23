@@ -35,7 +35,7 @@ import ru.insolent.castoms.ig.network.GroupPayload
 import ru.insolent.castoms.ig.network.NetworkClient
 import ru.insolent.castoms.ig.network.SocketManager
 import ru.insolent.castoms.ig.utils.GroupManager
-import ru.insolent.castoms.ig.service.MediaUploadWorker
+import ru.insolent.castoms.ig.workers.MediaUploadWorker
 import ru.insolent.castoms.ig.utils.ImageHelper
 import ru.insolent.castoms.ig.utils.MessageManager
 import ru.insolent.castoms.ig.utils.MessageSyncer
@@ -81,7 +81,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val _peerTyping = MutableStateFlow(false)
     val peerTyping: StateFlow<Boolean> = _peerTyping
 
-    // 🌟 Тайпинг в группах: имена печатающих участников
     private val groupTypingIds = mutableSetOf<String>()
     private val groupTypingJobs = mutableMapOf<String, kotlinx.coroutines.Job>()
     private val _groupTypingNames = MutableStateFlow<List<String>>(emptyList())
@@ -177,15 +176,19 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             val messageId: String
 
             if (isGroup) {
-                // Сначала сохраняем (для UI), потом шифруем для каждого участника
+                // Шифруем для каждого участника и храним контейнер — тогда ретрай
+                // сможет переотправить без повторного шифрования
+                val payloads = buildGroupPayloads(content)
+                val container = com.google.gson.Gson().toJson(mapOf("payloads" to payloads))
+                // saveOutgoingMessage принимает EncryptedPayload: контейнер кладём в data,
+                // type=-1 — маркер группового сообщения (единый формат с медиа в группах).
                 messageId = messageManager.saveOutgoingMessage(
                     chatId = chatId, content = text, myId = myId,
-                    encryptedPayload = null, status = MessageStatus.SENDING,
+                    encryptedPayload = EncryptedPayload(type = -1, data = container), status = MessageStatus.SENDING,
                     replyToMessageId = replyToMessageId,
                     replyToSenderName = replyToSenderName,
                     replyToContent = replyToContent
                 )
-                val payloads = buildGroupPayloads(content)
                 val sent = SocketManager.sendGroupMessage(chatId, payloads, messageId, "text")
                 messageManager.updateStatus(chatId, messageId, if (sent) MessageStatus.SENT else MessageStatus.FAILED)
                 return@withContext sent
@@ -485,8 +488,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             messageManager.getPendingMessages(chatId).first().let { pending ->
                 for (msg in pending) {
                     try {
-                        val payload = Gson().fromJson(msg.encryptedPayload, EncryptedPayload::class.java)
-                        val sent = SocketManager.sendEncryptedMessage(chatId, payload, msg.messageId, msg.messageType)
+                        // 🌟 Групповой контейнер {payloads:[...]} — шлём group_message
+                        val groupPayloads = parseGroupPayloads(msg.encryptedPayload)
+                        val sent = if (groupPayloads != null) {
+                            SocketManager.sendGroupMessage(chatId, groupPayloads, msg.messageId, msg.messageType)
+                        } else {
+                            val payload = Gson().fromJson(msg.encryptedPayload, EncryptedPayload::class.java)
+                            SocketManager.sendEncryptedMessage(chatId, payload, msg.messageId, msg.messageType)
+                        }
                         messageManager.updateStatus(chatId, msg.messageId, if (sent) MessageStatus.SENT else MessageStatus.FAILED)
                     } catch (e: Exception) {
                         messageManager.updateStatus(chatId, msg.messageId, MessageStatus.FAILED)
@@ -610,6 +619,33 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 messageManager.updateAttachmentDownloadProgress(messageId, att.fileId, 0)
             }
         } catch (_: Exception) {}
+    }
+
+    /**
+     * Парсинг группового контейнера {payloads:[...]}; null — если не групповой.
+     * Понимает две формы хранения:
+     *  1) {"payloads":[...]} — напрямую;
+     *  2) {"type":-1,"data":"{payloads:...}"} — EncryptedPayload-обёртка, как пишет
+     *     MessageManager.saveOutgoingMessage (единый формат с медиа в группах).
+     */
+    private fun parseGroupPayloads(raw: String?): List<GroupPayload>? {
+        if (raw.isNullOrEmpty()) return null
+        return try {
+            val obj = com.google.gson.JsonParser.parseString(raw).asJsonObject
+            val target = when {
+                obj.has("payloads") -> obj
+                obj.has("data") && obj.get("type")?.asInt == -1 ->
+                    com.google.gson.JsonParser.parseString(obj.get("data").asString).asJsonObject
+                else -> return null
+            }
+            if (!target.has("payloads")) return null
+            target.getAsJsonArray("payloads").map {
+                val e = it.asJsonObject
+                GroupPayload(e.get("userId").asString, e.get("type").asInt, e.get("data").asString)
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     companion object {

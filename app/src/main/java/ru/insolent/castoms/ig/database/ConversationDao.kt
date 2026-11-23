@@ -7,14 +7,17 @@ import kotlinx.coroutines.flow.Flow
 interface ConversationDao {
     /**
      * Чаты с сообщениями + пустые ГРУППЫ (группа = псевдо-контакт isGroup=1).
-     * Пустые личные чаты намеренно не показываем (прежнее поведение) —
-     * иначе в списке окажутся все участники групп, сохранённые как контакты.
+     * Для входящих сообщений в группах превью с префиксом «Имя: ».
      */
     @Query("""
         SELECT 
             m.chatId as contactId,
             COALESCE(c.displayName, c.username, m.chatId) as contactName,
-            m.content as lastMessage,
+            CASE 
+                WHEN c.isGroup = 1 AND m.isIncoming = 1 AND m.senderName IS NOT NULL 
+                THEN m.senderName || ': ' || m.content 
+                ELSE m.content 
+            END as lastMessage,
             m.messageType as messageType,
             m.timestamp as lastMessageTime,
             (SELECT COUNT(*) FROM messages WHERE chatId = m.chatId AND isIncoming = 1 AND status != 'READ') as unreadCount,
@@ -44,9 +47,6 @@ interface ConversationDao {
     """)
     fun getConversations(): Flow<List<Conversation>>
 
-    /**
-     * Считает количество непрочитанных сообщений в чате
-     */
     @Query("""
         SELECT COUNT(*) FROM messages 
         WHERE chatId = :chatId AND isIncoming = 1 AND status = 'DELIVERED'

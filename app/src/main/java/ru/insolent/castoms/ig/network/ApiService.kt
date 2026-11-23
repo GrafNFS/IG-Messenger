@@ -1,5 +1,7 @@
 package ru.insolent.castoms.ig.network
 
+import androidx.annotation.Keep
+import com.google.gson.annotations.SerializedName
 import ru.insolent.castoms.ig.models.*
 import retrofit2.Response
 import retrofit2.http.*
@@ -120,13 +122,19 @@ interface ApiService {
         @Path("groupId") groupId: String,
         @Path("userId") userId: String
     ): Response<Any>
+    /** ------ **/
 }
 
 // === МОДЕЛИ ДАННЫХ ===
+@Keep
 data class UserDto(
+    @SerializedName("id")
     val id: String,
+    @SerializedName("username")
     val username: String,
+    @SerializedName("displayName")
     val displayName: String?,
+    @SerializedName("avatarUrl")
     val avatarUrl: String?
 )
 
@@ -138,9 +146,13 @@ data class DeviceTokenRequest(
     val platform: String = "android"
 )
 
+@Keep
 data class FriendRequestDto(
+    @SerializedName("id")
     val id: String,
+    @SerializedName("sender")
     val sender: UserDto,
+    @SerializedName("createdAt")
     val createdAt: String
 )
 
@@ -162,15 +174,23 @@ data class LoginRequest(
     val password: String
 )
 
+@Keep
 data class AuthResponse(
+    @SerializedName("message")
     val message: String,
+    @SerializedName("token")
     val token: String,
+    @SerializedName("user")
     val user: UserData
 )
 
+@Keep
 data class UserData(
+    @SerializedName("id")
     val id: String,
+    @SerializedName("username")
     val username: String,
+    @SerializedName("email")
     val email: String
 )
 
@@ -184,92 +204,179 @@ data class KeysUploadRequest(
     val registrationId: Int  // ✅ Добавь это поле!
 )
 
+@Keep
 data class UserSearchResult(
+    @SerializedName("id")
     val id: String,
+    @SerializedName("username")
     val username: String,
+    @SerializedName("displayName")
     val displayName: String?,
+    @SerializedName("avatarUrl")
     val avatarUrl: String?
 )
 
+@Keep
 data class ApiContact(
+    @SerializedName("id")
     val id: String,
+    @SerializedName("username")
     val username: String,
+    @SerializedName("displayName")
     val displayName: String?,
+    @SerializedName("avatarUrl")
     val avatarUrl: String?,
+    @SerializedName("status")
     val status: String?
 )
 
+@Keep
 data class EncryptedPayloadDTO(
+    @SerializedName("type")
     val type: Int,
+    @SerializedName("data")
     val data: String
 )
 
+@Keep
 data class MessageDTO(
+    @SerializedName("id")
     val id: String?,
+    @SerializedName("senderId")
     val senderId: String,
+    @SerializedName("payload")
     val payload: EncryptedPayloadDTO,  // ✅ Теперь объект, а не String
+    @SerializedName("timestamp")
     val timestamp: Long,
+    @SerializedName("delivered")
     val delivered: Boolean,
+    @SerializedName("isIncoming")
     val isIncoming: Boolean
 )
 
-data class AddContactRequest(val userId: String, val contactUserId: String)
-data class AddContactResponse(val success: Boolean, val message: String)
+data class AddContactRequest(
+    val userId: String,
+    val contactUserId: String
+)
 
+@Keep
+data class AddContactResponse(
+    @SerializedName("success")
+    val success: Boolean,
+    @SerializedName("message")
+    val message: String
+)
+
+@Keep
 data class OneTimeKey(
+    @SerializedName("keyId")
     val keyId: Int,
+    @SerializedName("publicKey")
     val publicKey: String
 )
 
+@Keep
 data class KeysUploadResponse(
+    @SerializedName("success")
     val success: Boolean,
+    @SerializedName("message")
     val message: String? = null,
+    @SerializedName("remaining")
     val remaining: Int? = null
 )
 
+@Keep
 data class KeysBundle(
+    @SerializedName("identityKey")
     val identityKey: String,
+    @SerializedName("signedPreKeyId")
     val signedPreKeyId: Int,
+    @SerializedName("signedPreKeyPublic")
     val signedPreKeyPublic: String,
+    @SerializedName("signedPreKeySig")
     val signedPreKeySig: String,
+    @SerializedName("oneTimeKeys")
     val oneTimeKeys: List<OneTimeKey>,
+    @SerializedName("registrationId")
     val registrationId: Int  // ✅ Добавь это поле!
 )
 
+@Keep
 data class UserStatusDTO(
+    @SerializedName("userId")
     val userId: String,
+    @SerializedName("isOnline")
     val isOnline: Boolean
 )
 
 // Data class для ответа сервера
+@Keep
 data class MediaUploadResponse(
+    @SerializedName("fileId")
     val fileId: String,
+    @SerializedName("size")
     val size: Long,
+    @SerializedName("uploadedAt")
     val uploadedAt: Long
 )
 
-data class CreateGroupRequest(val name: String, val memberIds: List<String>)
-
-data class GroupResponse(
-    val id: String,
+@Keep
+data class CreateGroupRequest(
+    @SerializedName("name")
     val name: String,
+    @SerializedName("memberIds")
+    val memberIds: List<String>
+)
+
+@Keep
+data class GroupResponse(
+    @SerializedName("id")
+    val id: String,
+    @SerializedName("name")
+    val name: String,
+    @SerializedName("avatarUrl")
     val avatarUrl: String? = null,
+    @SerializedName("createdById")
     val createdById: String? = null,
+    @SerializedName("myRole")
     val myRole: String? = null,
+    @SerializedName("members")
     val members: List<GroupMemberDto> = emptyList()
 )
 
+@Keep
 data class GroupMemberDto(
+    @SerializedName("userId")
     val userId: String,
+    @SerializedName("role")
     val role: String? = null,
+    @SerializedName("username")
     val username: String? = null,
+    @SerializedName("displayName")
     val displayName: String? = null,
+    @SerializedName("avatarUrl")
     val avatarUrl: String? = null
 )
 
 /** Entry зашифрованного сообщения для конкретного участника группы */
-data class GroupPayload(val userId: String, val type: Int, val data: String)
+@Keep
+data class GroupPayload(
+    @SerializedName("userId")
+    val userId: String,
+    @SerializedName("type")
+    val type: Int,
+    @SerializedName("data")
+    val data: String
+)
 
-data class RemainingKeysResponse(val remaining: Int)
+@Keep
+data class RemainingKeysResponse(
+    @SerializedName("remaining")
+    val remaining: Int
+)
 
-data class OneTimeKeysUploadRequest(val oneTimeKeys: List<OneTimeKey>)
+@Keep
+data class OneTimeKeysUploadRequest(
+    @SerializedName("oneTimeKeys")
+    val oneTimeKeys: List<OneTimeKey>
+)
