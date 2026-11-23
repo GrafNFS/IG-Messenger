@@ -112,7 +112,7 @@ class MediaUploadWorker(
                         )
 
                         try {
-                            val response = NetworkClient.apiService.uploadMedia(fileId, part)
+                            val response = NetworkClient.apiService.uploadMedia(fileId, part, file.length())
                             Log.d("MediaUploadWorker", "📡 Ответ сервера для $fileId: Code=${response.code()}, IsSuccessful=${response.isSuccessful}")
                             if (response.isSuccessful) {
                                 runBlocking {

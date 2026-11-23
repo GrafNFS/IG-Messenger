@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.first
 import ru.insolent.castoms.ig.crypto.EncryptedPayload
 import ru.insolent.castoms.ig.crypto.MediaAttachment
 import ru.insolent.castoms.ig.crypto.MediaCrypto
-import ru.insolent.castoms.ig.database.AttachmentEntity // ✅ Новый импорт
+import ru.insolent.castoms.ig.database.AttachmentEntity
 import ru.insolent.castoms.ig.database.ContactEntity
 import ru.insolent.castoms.ig.database.Conversation
 import ru.insolent.castoms.ig.database.CryptoDatabase
@@ -27,9 +27,6 @@ class MessageManager(private val context: Context) {
     private val daoChat = db.conversationDao()
     private val contactDao = db.contactDao()
 
-    /**
-     * Сохраняет исходящее сообщение перед отправкой
-     */
     suspend fun saveOutgoingMessage(
         chatId: String,
         content: String,
@@ -40,18 +37,16 @@ class MessageManager(private val context: Context) {
         replyToSenderName: String? = null,
         replyToContent: String? = null,
         messageType: String = "text",
-        attachments: List<AttachmentEntity>? = null, // ✅ Принимает список вложений
+        attachments: List<AttachmentEntity>? = null,
         uploadProgress: Int = 0,
         messageId: String = UUID.randomUUID().toString()
     ): String {
-        // Внутри MessageManager.kt перед созданием MessageEntity:
         val foundUrl = LinkPreviewHelper.extractUrl(content)
         var title: String? = null
         var description: String? = null
         var imageUrl: String? = null
 
         if (foundUrl != null) {
-            // Делаем сетевой запрос за мета-данными сайта
             val preview = LinkPreviewHelper.fetchPreview(foundUrl)
             if (preview != null) {
                 title = preview.title
@@ -62,7 +57,6 @@ class MessageManager(private val context: Context) {
 
         val payloadJson = Gson().toJson(encryptedPayload)
 
-        // ✅ Создаем сообщение БЕЗ полей медиа (они теперь в AttachmentEntity)
         val message = MessageEntity(
             chatId = chatId,
             messageId = messageId,
@@ -71,7 +65,7 @@ class MessageManager(private val context: Context) {
             encryptedPayload = payloadJson,
             timestamp = System.currentTimeMillis(),
             status = status,
-            isIncoming = false, // ✅ ИСПРАВЛЕНО: исходящее сообщение должно быть false!
+            isIncoming = false,
             replyToMessageId = replyToMessageId,
             replyToSenderName = replyToSenderName,
             replyToContent = replyToContent,
@@ -82,7 +76,6 @@ class MessageManager(private val context: Context) {
         )
         dao.insertMessage(message)
 
-        // ✅ Если есть вложения, сохраняем их в отдельную таблицу
         attachments?.let { atts ->
             val attachmentEntities = atts.map { att ->
                 AttachmentEntity(
@@ -104,9 +97,6 @@ class MessageManager(private val context: Context) {
         return messageId
     }
 
-    /**
-     * Сохраняет входящее расшифрованное сообщение
-     */
     suspend fun saveIncomingMessage(
         chatId: String,
         senderId: String,
@@ -117,7 +107,7 @@ class MessageManager(private val context: Context) {
         replyToSenderName: String? = null,
         replyToContent: String? = null,
         messageType: String = "text",
-        attachments: List<MediaAttachment>? = null, // ✅ Принимает список вложений
+        attachments: List<MediaAttachment>? = null,
         senderName: String? = null
     ): String {
 
@@ -127,7 +117,6 @@ class MessageManager(private val context: Context) {
         var imageUrl: String? = null
 
         if (foundUrl != null) {
-            // Делаем сетевой запрос за мета-данными сайта
             val preview = LinkPreviewHelper.fetchPreview(foundUrl)
             if (preview != null) {
                 title = preview.title
@@ -135,7 +124,6 @@ class MessageManager(private val context: Context) {
                 imageUrl = preview.imageUrl
             }
         }
-        // ✅ Создаем сообщение БЕЗ полей медиа
         val message = MessageEntity(
             chatId = chatId,
             messageId = messageId,
@@ -144,7 +132,7 @@ class MessageManager(private val context: Context) {
             encryptedPayload = null,
             timestamp = timestamp,
             status = MessageStatus.DELIVERED,
-            isIncoming = true, // ✅ ИСПРАВЛЕНО: входящее сообщение должно быть true
+            isIncoming = true,
             replyToMessageId = replyToMessageId,
             replyToSenderName = replyToSenderName,
             replyToContent = replyToContent,
@@ -156,7 +144,6 @@ class MessageManager(private val context: Context) {
         )
         dao.insertMessage(message)
 
-        // ✅ Если есть вложения, сохраняем их в отдельную таблицу
         attachments?.let { atts ->
             val attachmentEntities = atts.map { att ->
                 AttachmentEntity(
@@ -179,7 +166,9 @@ class MessageManager(private val context: Context) {
     }
 
     /**
-     * Скачивает и расшифровывает медиафайл
+     * Скачивает (с ДОКАЧКОЙ по Range) и расшифровывает медиафайл.
+     * Частичный .enc остаётся на диске между попытками и перезапусками —
+     * обрыв сети больше не означает «качай сначала».
      */
     suspend fun downloadAndDecryptMedia(
         context: Context,
@@ -200,7 +189,6 @@ class MessageManager(private val context: Context) {
             val extension = if (mediaType.startsWith("image/")) "jpg" else "mp4"
             val decryptedFile = File(mediaDir, "$fileId.$extension")
 
-            // Проверяем, не расшифрован ли файл уже
             if (decryptedFile.exists() && decryptedFile.length() > 0) {
                 Log.d("MediaManager", "File already decrypted and valid: ${decryptedFile.absolutePath}")
                 updateAttachmentLocalPath(messageId, fileId, decryptedFile.absolutePath)
@@ -213,20 +201,34 @@ class MessageManager(private val context: Context) {
 
             while (attempt < maxAttempts && !downloadSuccess) {
                 attempt++
-                Log.d("MediaManager", "Download attempt $attempt/$maxAttempts for $fileId")
+                val resumeFrom = encryptedFile.length()
+                val rangeHeader = if (resumeFrom > 0) "bytes=$resumeFrom-" else null
+                Log.d("MediaManager", "Download attempt $attempt/$maxAttempts for $fileId (resume from $resumeFrom)")
 
-                val response = NetworkClient.apiService.downloadMedia(fileId)
+                val response = NetworkClient.apiService.downloadMedia(fileId, rangeHeader)
                 if (!response.isSuccessful || response.body() == null) {
-                    Log.w("MediaManager", "Download failed (attempt $attempt). Code: ${response.code()}")
-                    delay(1000)
+                    if (response.code() == 416) {
+                        // Range за пределами файла: серверный файл меньше локального частичного — с нуля
+                        Log.w("MediaManager", "416 Range Not Satisfiable — restarting from zero")
+                        encryptedFile.delete()
+                    } else {
+                        Log.w("MediaManager", "Download failed (attempt $attempt). Code: ${response.code()}")
+                        delay(1000)
+                    }
                     continue
                 }
 
-                var totalBytes = 0L
-                val expectedSize = expectedFileSize
+                // Сервер поддерживает Range? Только 206 означает «докачиваем»,
+                // 200 — отдал файл с начала: перезаписываем локальный частичный
+                val append = resumeFrom > 0 && response.code() == 206
+                if (resumeFrom > 0 && !append) {
+                    Log.w("MediaManager", "Server ignored Range (code ${response.code()}), restarting download")
+                    encryptedFile.delete()
+                }
+                var totalBytes = encryptedFile.length()
 
                 response.body()!!.byteStream().use { inputStream ->
-                    FileOutputStream(encryptedFile).use { outputStream ->
+                    FileOutputStream(encryptedFile, append).use { outputStream ->
                         val buffer = ByteArray(8192)
                         var bytesRead: Int
 
@@ -234,20 +236,18 @@ class MessageManager(private val context: Context) {
                             outputStream.write(buffer, 0, bytesRead)
                             totalBytes += bytesRead
 
-                            if (expectedSize > 0) {
-                                val progress = ((totalBytes.toFloat() / expectedSize) * 50).toInt().coerceIn(0, 50)
+                            if (expectedFileSize > 0) {
+                                val progress = ((totalBytes.toFloat() / expectedFileSize) * 50).toInt().coerceIn(0, 50)
                                 onProgress(progress)
-                                // ✅ Обновляем прогресс КОНКРЕТНОГО вложения
                                 updateAttachmentDownloadProgress(messageId, fileId, progress)
                             }
                         }
                     }
                 }
 
-                // ПРОВЕРКА ЦЕЛОСТНОСТИ
-                if (expectedSize > 0 && totalBytes != expectedSize) {
-                    Log.w("MediaManager", "⚠️ File incomplete! Expected: $expectedSize, Downloaded: $totalBytes. Deleting and retrying...")
-                    encryptedFile.delete()
+                if (expectedFileSize > 0 && totalBytes != expectedFileSize) {
+                    Log.w("MediaManager", "⚠️ File incomplete! Expected: $expectedFileSize, have: $totalBytes. Will resume...")
+                    // Частичный файл остаётся — следующая попытка докачает с места обрыва
                     delay(1500)
                     continue
                 }
@@ -263,7 +263,6 @@ class MessageManager(private val context: Context) {
                 return null
             }
 
-            // Расшифровка
             onProgress(75)
             updateAttachmentDownloadProgress(messageId, fileId, 75)
             MediaCrypto.decryptFile(encryptedFile, decryptedFile, aesKey)
@@ -272,10 +271,7 @@ class MessageManager(private val context: Context) {
 
             encryptedFile.delete()
             val localPath = decryptedFile.absolutePath
-
-            // ✅ Обновляем путь КОНКРЕТНОГО вложения в БД
             updateAttachmentLocalPath(messageId, fileId, localPath)
-
             Log.d("MediaManager", "✅ Media decrypted to: $localPath")
             return localPath
 
@@ -286,12 +282,7 @@ class MessageManager(private val context: Context) {
         }
     }
 
-    // =========================================================
-    // ✅ НОВЫЕ МЕТОДЫ ДЛЯ РАБОТЫ С ВЛОЖЕНИЯМИ (AttachmentEntity)
-    // =========================================================
-
     suspend fun updateAttachmentLocalPath(messageId: String, fileId: String, localPath: String) {
-        Log.d("MediaManager", "📝 Updating DB: Setting localFilePath = '$localPath' for attachment fileId = $fileId in message $messageId")
         dao.updateAttachmentLocalPath(messageId, fileId, localPath)
     }
 
@@ -302,10 +293,6 @@ class MessageManager(private val context: Context) {
     suspend fun updateAttachmentUploadProgress(messageId: String, fileId: String, progress: Int) {
         dao.updateAttachmentUploadProgress(messageId, fileId, progress)
     }
-
-    // =========================================================
-    // ✅ СТАРЫЕ МЕТОДЫ (адаптированные или оставленные для совместимости)
-    // =========================================================
 
     suspend fun getUnreadMessages(chatId: String): List<MessageEntity> {
         return dao.getUnreadMessages(chatId)
@@ -328,19 +315,17 @@ class MessageManager(private val context: Context) {
     }
 
     suspend fun getAttachmentsForMessage(messageId: String): List<AttachmentEntity> {
-        return dao.getAttachmentsForMessage(messageId) // Измените на имя вашего DAO метода, который возвращает List<AttachmentEntity> по messageId
+        return dao.getAttachmentsForMessage(messageId)
     }
 
     suspend fun getMessagePayload(messageId: String): String? {
-        return dao.getMessagePayload(messageId) // Метод возвращает поле encryptedPayload (строку JSON) из таблицы сообщений по messageId
+        return dao.getMessagePayload(messageId)
     }
 
-    // ✅ Наблюдение за историей чата вместе с вложениями
     fun observeChatHistoryWithAttachments(chatId: String): Flow<List<MessageWithAttachments>> {
         return dao.observeMessagesWithAttachments(chatId)
     }
 
-    // ✅ Массовое сохранение вложений (для syncMessages)
     suspend fun saveAttachmentsBatch(attachments: List<AttachmentEntity>) {
         dao.insertAttachments(attachments)
     }
@@ -370,7 +355,7 @@ class MessageManager(private val context: Context) {
     }
 
     suspend fun deleteContact(id: String) {
-        contactDao.deleteById(id) //— подставь существующий метод своего ContactDao
+        contactDao.deleteById(id)
     }
 
     fun getConversations(): Flow<List<Conversation>> {
@@ -399,7 +384,6 @@ class MessageManager(private val context: Context) {
     }
 
     suspend fun updateContactOnlineStatus(userId: String, isOnline: Boolean) {
-        Log.d("MessageManager", "🔄 updateContactOnlineStatus: userId=$userId, isOnline=$isOnline")
         daoChat.updateContactOnlineStatus(userId, isOnline)
     }
 

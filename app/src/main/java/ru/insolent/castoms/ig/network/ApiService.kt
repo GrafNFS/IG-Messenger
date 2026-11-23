@@ -2,6 +2,8 @@ package ru.insolent.castoms.ig.network
 
 import androidx.annotation.Keep
 import com.google.gson.annotations.SerializedName
+import okhttp3.MultipartBody
+import okhttp3.ResponseBody
 import ru.insolent.castoms.ig.models.*
 import retrofit2.Response
 import retrofit2.http.*
@@ -58,17 +60,19 @@ interface ApiService {
     @GET("api/users/{userId}/status")
     suspend fun getUserStatus(@Path("userId") userId: String): Response<UserStatusDTO>
 
+    @GET("api/media/{fileId}")
+    suspend fun downloadMedia(
+        @Path("fileId") fileId: String,
+        @Header("Range") range: String? = null
+    ): Response<ResponseBody>
+
     @Multipart
     @POST("api/media/upload")
     suspend fun uploadMedia(
         @Query("fileId") fileId: String,
-        @Part file: okhttp3.MultipartBody.Part
-    ): Response<MediaUploadResponse>
-
-    // В интерфейсе ApiService
-    @Headers("Accept-Encoding: identity")
-    @GET("api/media/{fileId}")
-    suspend fun downloadMedia(@Path("fileId") fileId: String): Response<okhttp3.ResponseBody>
+        @Part file: MultipartBody.Part,
+        @Query("size") size: Long              // ← НОВОЕ
+    ): Response<UploadResponse>
 
     @Headers("Accept-Encoding: identity")
     @GET("api/apk/{version}")
@@ -126,6 +130,8 @@ interface ApiService {
 }
 
 // === МОДЕЛИ ДАННЫХ ===
+
+data class UploadResponse(val fileId: String? = null, val size: Long? = null)
 @Keep
 data class UserDto(
     @SerializedName("id")
