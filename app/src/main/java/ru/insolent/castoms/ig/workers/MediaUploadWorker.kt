@@ -1,4 +1,5 @@
 package ru.insolent.castoms.ig.workers
+
 import android.content.Context
 import android.util.Log
 import androidx.work.CoroutineWorker
@@ -79,6 +80,8 @@ class MediaUploadWorker(
         } catch (_: Exception) { null }
         val payloadObject = gson.fromJson(encryptedPayloadJson, EncryptedPayload::class.java)
         val tempFilesList = mutableListOf<File>()
+        var uploadAndSendSucceeded = false   // ← НОВЫЙ ФЛАГ
+
 
         try {
             val uploadJobs = coroutineScope {
@@ -149,6 +152,7 @@ class MediaUploadWorker(
 
             if (isSocketSent) {
                 updateMessageStatus(contactId, messageId, MessageStatus.SENT)
+                uploadAndSendSucceeded = true
                 Log.d("MediaUploadWorker", "🎉 Воркер успешно выполнил всю работу!")
                 return Result.success()
             } else {
@@ -161,10 +165,12 @@ class MediaUploadWorker(
             updateMessageStatus(contactId, messageId, MessageStatus.FAILED)
             return Result.failure()
         } finally {
-            tempFilesList.forEach { file ->
-                if (file.exists()) {
-                    file.delete()
-                    Log.d("MediaUploadWorker", "🗑️ Временный зашифрованный файл удален: ${file.name}")
+            if (uploadAndSendSucceeded) {
+                tempFilesList.forEach { file ->
+                    if (file.exists()) {
+                        file.delete()
+                        Log.d("MediaUploadWorker", "🗑️ Временный зашифрованный файл удален: ${file.name}")
+                    }
                 }
             }
         }
