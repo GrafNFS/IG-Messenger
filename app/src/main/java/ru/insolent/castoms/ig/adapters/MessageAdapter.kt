@@ -521,7 +521,7 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
                 }
 
                 rawHolder.messageContainer.setBackgroundResource(R.drawable.bg_message_sent)
-                rawHolder.tvText.setTextColor(ContextCompat.getColor(context, R.color.white))
+                rawHolder.tvText.setTextColor(ContextCompat.getColor(context, R.color.message_sent_text))
                 rawHolder.btnPlayAudio.backgroundTintList =
                     ContextCompat.getColorStateList(context, R.color.white)
                 rawHolder.btnPlayAudio.imageTintList =
@@ -532,7 +532,7 @@ class MessageAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
                 rawHolder.ivStatus.visibility = View.GONE
                 rawHolder.messageContainer.setBackgroundResource(R.drawable.bg_message_incoming)
-                rawHolder.tvText.setTextColor(ContextCompat.getColor(context, R.color.black))
+                rawHolder.tvText.setTextColor(ContextCompat.getColor(context, R.color.message_incoming_text))
                 rawHolder.btnPlayAudio.backgroundTintList =
                     ContextCompat.getColorStateList(context, R.color.black)
                 rawHolder.btnPlayAudio.imageTintList =

@@ -80,7 +80,7 @@ class ContactsAdapter(
             holder.btnAdd.setImageResource(android.R.drawable.ic_menu_send)
             holder.btnAdd.isEnabled = false
             holder.btnAdd.alpha = 0.5f
-            holder.itemView.setOnClickListener { onItemClick(contact) }
+            //holder.itemView.setOnClickListener { onItemClick(contact) }
         } else {
             // Не в контактах и заявка не отправлена: показываем кнопку "+"
             holder.btnAdd.isVisible = true
@@ -88,7 +88,7 @@ class ContactsAdapter(
             holder.btnAdd.isEnabled = true
             holder.btnAdd.alpha = 1.0f
             holder.btnAdd.setOnClickListener { onAddClick(contact) }
-            holder.itemView.setOnClickListener { onItemClick(contact) }
+            //holder.itemView.setOnClickListener { onItemClick(contact) }
         }
     }
 

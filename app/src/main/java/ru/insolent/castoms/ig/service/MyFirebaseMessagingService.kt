@@ -128,14 +128,15 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
 
         val contact = messageManager.getContactById(senderId)
         val senderName = when (contact) {
-            is ru.insolent.castoms.ig.database.ContactEntity -> contact.displayName ?: contact.username ?: "Неизвестный"
+            is ru.insolent.castoms.ig.database.ContactEntity -> contact.displayName ?: contact.username ?: "Собеседник"
             else -> "Новое сообщение"
         }
 
         // Настраиваем открытие ChatActivity при тапе по пушу
         val intent = Intent(this, ChatActivity::class.java).apply {
             putExtra("EXTRA_CONTACT_ID", senderId)
-            putExtra("EXTRA_CONTACT_NAME", senderName)
+            putExtra("EXTRA_CONTACT_NAME", contact?.displayName ?: contact?.username ?: "Собеседник")
+            putExtra("EXTRA_IS_GROUP", contact?.isGroup ?: false)
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
         val pendingIntent = PendingIntent.getActivity(

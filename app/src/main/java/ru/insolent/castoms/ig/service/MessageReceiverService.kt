@@ -16,6 +16,7 @@ import ru.insolent.castoms.ig.ChatActivity
 import ru.insolent.castoms.ig.R
 import ru.insolent.castoms.ig.crypto.EncryptedPayload
 import ru.insolent.castoms.ig.crypto.MessageCryptoManager
+import ru.insolent.castoms.ig.database.ContactEntity
 import ru.insolent.castoms.ig.database.MessageStatus
 import ru.insolent.castoms.ig.network.NetworkClient
 import ru.insolent.castoms.ig.network.SocketManager
@@ -347,7 +348,7 @@ class MessageReceiverService : Service() {
             // Уведомление: имя группы + отправитель
             if (ChatActivity.currentOpenChatId != groupId) {
                 val sender = messageManager.getContactById(from)
-                val senderName = (sender as? ru.insolent.castoms.ig.database.ContactEntity)?.displayName ?: "Участник"
+                val senderName = (sender as? ru.insolent.castoms.ig.database.ContactEntity)?.displayName ?: "Собеседник"
                 val text = when {
                     messageContent.text.isNotEmpty() -> "$senderName: ${messageContent.text}"
                     messageType == "audio" -> "$senderName: 🎙️ Голосовое сообщение"
@@ -366,7 +367,7 @@ class MessageReceiverService : Service() {
         }
     }
 
-    private fun showNewMessageNotification(messageId: String, contact: Any?, messageText: String, senderId: String) {
+    private fun showNewMessageNotification(messageId: String, contact: ContactEntity?, messageText: String, senderId: String) {
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -376,8 +377,11 @@ class MessageReceiverService : Service() {
 
         val intent = Intent(this, ChatActivity::class.java).apply {
             putExtra("EXTRA_CONTACT_ID", senderId)
+            putExtra("EXTRA_CONTACT_NAME", contact?.displayName ?: contact?.username ?: "Собеседник")
+            putExtra("EXTRA_IS_GROUP", contact?.isGroup ?: false)
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
+
         val pendingIntent = PendingIntent.getActivity(
             this, messageId.hashCode(), intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE

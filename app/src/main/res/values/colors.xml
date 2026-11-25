@@ -23,7 +23,9 @@
 
     <!-- Сообщения -->
     <color name="message_sent">#5B8CFF</color>
-    <color name="message_incoming">#3A3A3A</color>
+    <color name="message_sent_text">#000000</color>
+    <color name="message_incoming">#1A1A1A</color>
+    <color name="message_incoming_text">#FFFFFF</color>
     <color name="message_received_out">#5b97ff</color>
     <color name="message_received_in">#9E9E9E</color>
     <color name="highlight_color">#40FFFFFF</color>
