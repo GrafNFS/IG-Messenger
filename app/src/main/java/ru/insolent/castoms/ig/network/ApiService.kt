@@ -25,11 +25,11 @@ interface ApiService {
     @GET("api/users/search")
     suspend fun searchUsers(
         @Query("query") query: String,
-        @Query("userId") currentUserId: String
+        @Query("userId") currentUserId: String = ""
     ): Response<List<UserSearchResult>>
 
     @GET("api/contacts")
-    suspend fun getMyContacts(@Query() userId: String): Response<List<ApiContact>>
+    suspend fun getMyContacts(@Query("userId") userId: String = ""): Response<List<ApiContact>>
 
     @POST("api/contacts")
     suspend fun addContact(@Body request: AddContactRequest): Response<AddContactResponse>
@@ -186,12 +186,6 @@ data class AuthResponse(
 )
 
 data class UserData(val id: String, val username: String, val email: String)
-
-data class UpdateProfileRequest(
-    val displayName: String? = null,
-    val phone: String? = null,
-    val avatarUrl: String? = null
-)
 
 // === Ключи: мульти-девайс ===
 data class OneTimeKey(val keyId: Int, val publicKey: String)

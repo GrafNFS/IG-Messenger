@@ -142,33 +142,34 @@ class MediaUploadWorker(
             Log.d("MediaUploadWorker", "📨 Все файлы на сервере. Отправляем сокет...")
             val isSocketSent = if (containerEntries != null) {
                 if (isGroupContainer) {
-                    SocketManager.sendGroupMessage(
-                        contactId,
-                        containerEntries.map {
-                            ru.insolent.castoms.ig.network.GroupDevicePayload(
-                                it.get("userId").asString, it.get("deviceId").asInt,
-                                it.get("type").asInt, it.get("data").asString
-                            )
-                        },
-                        messageId, typeMsg
-                    )
+                    SocketManager.sendGroupMessage(contactId, containerEntries.map {
+                        ru.insolent.castoms.ig.network.GroupDevicePayload(
+                            it.get("userId").asString, it.get("deviceId").asInt,
+                            it.get("type").asInt, it.get("data").asString)
+                    }, messageId, typeMsg)
                 } else {
-                    SocketManager.sendEncryptedMessage(
-                        contactId,
-                        containerEntries.map {
-                            ru.insolent.castoms.ig.network.DevicePayload(
-                                it.get("deviceId").asInt, it.get("type").asInt, it.get("data").asString
-                            )
-                        },
-                        messageId, typeMsg
-                    )
+                    SocketManager.sendEncryptedMessage(contactId, containerEntries.map {
+                        ru.insolent.castoms.ig.network.DevicePayload(
+                            it.get("deviceId").asInt, it.get("type").asInt, it.get("data").asString)
+                    }, messageId, typeMsg)
                 }
             } else {
                 val payload = gson.fromJson(encryptedPayloadJson, EncryptedPayload::class.java)
-                SocketManager.sendEncryptedMessage(
-                    contactId, listOf(ru.insolent.castoms.ig.network.DevicePayload(1, payload.type, payload.data)),
-                    messageId, typeMsg
-                )
+                SocketManager.sendEncryptedMessage(contactId,
+                    listOf(ru.insolent.castoms.ig.network.DevicePayload(1, payload.type, payload.data)),
+                    messageId, typeMsg)
+            }
+            Log.d("MediaUploadWorker", "🔌 Статус отправки сокета: $isSocketSent")
+
+            uploadAndSendSucceeded = isSocketSent
+
+            if (isSocketSent) {
+                updateMessageStatus(contactId, messageId, MessageStatus.SENT)
+                Log.d("MediaUploadWorker", "🎉 Воркер успешно выполнил всю работу!")
+                return Result.success()
+            } else {
+                updateMessageStatus(contactId, messageId, MessageStatus.FAILED)
+                return Result.failure()
             }
 
         } catch (e: Exception) {
@@ -176,6 +177,7 @@ class MediaUploadWorker(
             updateMessageStatus(contactId, messageId, MessageStatus.FAILED)
             return Result.failure()
         } finally {
+            // Удаляем временный файл только после УСПЕШНОЙ отправки
             if (uploadAndSendSucceeded) {
                 tempFilesList.forEach { file ->
                     if (file.exists()) {

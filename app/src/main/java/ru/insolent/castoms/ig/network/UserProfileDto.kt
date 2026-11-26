@@ -26,12 +26,8 @@ data class UserProfileDto(
 )
 
 // Для обновления профиля (отправляем на сервер)
-@Keep
 data class UpdateProfileRequest(
-    @SerializedName("displayName")
-    val displayName: String?,
-    @SerializedName("phone")
-    val phone: String?,
-    @SerializedName("avatarUrl")
-    val avatarUrl: String?
+    val displayName: String? = null,
+    val phone: String? = null,
+    val avatarUrl: String? = null
 )

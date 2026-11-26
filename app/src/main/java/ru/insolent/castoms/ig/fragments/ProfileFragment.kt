@@ -65,7 +65,7 @@ class ProfileFragment : Fragment() {
                         phone = dto.phone,
                         displayName = dto.displayName,
                         avatarUrl = dto.avatarUrl,
-                        status = dto.status
+                        status = dto.status!!
                     )
                     CryptoDatabase.getDatabase(requireContext())
                         .userProfileDao()

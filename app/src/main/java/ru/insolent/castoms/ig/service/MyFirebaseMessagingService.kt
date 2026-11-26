@@ -62,7 +62,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                 val payload = Gson().fromJson(payloadJson, EncryptedPayload::class.java)
 
                 // 2. 🌟 РАСШИФРОВЫВАЕМ сообщение прямо в фоне, пока телефон спит!
-                val messageContent = cryptoManager.decryptMessage(payload, from)
+                val messageContent = cryptoManager.decryptMessage(payload, from, 1)
                 val attachments = messageContent.attachments
 
                 // 3. Определяем тип контента (наша старая отлаженная логика)
