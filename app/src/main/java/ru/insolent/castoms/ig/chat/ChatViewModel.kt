@@ -82,11 +82,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val _peerTyping = MutableStateFlow(false)
     val peerTyping: StateFlow<Boolean> = _peerTyping
 
-    private val groupTypingIds = mutableSetOf<String>()
-    private val groupTypingJobs = mutableMapOf<String, kotlinx.coroutines.Job>()
-    private val _groupTypingNames = MutableStateFlow<List<String>>(emptyList())
-    val groupTypingNames: StateFlow<List<String>> = _groupTypingNames
-
     /** Сообщения чата (Room Flow) */
     val messages: Flow<List<MessageWithAttachments>> by lazy {
         messageManager.observeChatHistoryWithAttachments(chatId)
@@ -566,53 +561,19 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         SocketManager.onTypingIndicator = { userId, chatIdParam, isTyping ->
             if (userId == chatId && chatIdParam == myId) _peerTyping.value = isTyping
         }
-        SocketManager.onGroupTyping = { gId, userId, isTyping ->
-            if (gId == chatId) onGroupTyping(userId, isTyping)
-        }
-    }
-
-    /** Тайпинг участника группы; свой таймер гаснет через 4с, если stop не пришёл */
-    fun onGroupTyping(userId: String, isTyping: Boolean) {
-        if (!isGroup || userId == myId) return
-        groupTypingJobs.remove(userId)?.cancel()
-        if (isTyping) {
-            groupTypingIds.add(userId)
-            groupTypingJobs[userId] = viewModelScope.launch {
-                delay(4000)
-                groupTypingJobs.remove(userId)
-                groupTypingIds.remove(userId)
-                refreshTypingNames()
-            }
-        } else {
-            groupTypingIds.remove(userId)
-        }
-        refreshTypingNames()
-    }
-
-    private fun refreshTypingNames() {
-        viewModelScope.launch {
-            val members = groupManager.getMembers(chatId)
-            val nameMap = members.associate { it.userId to (it.displayName ?: it.username ?: it.userId) }
-            _groupTypingNames.value = groupTypingIds.mapNotNull { nameMap[it] ?: it }
-        }
     }
 
     fun unbindSocket() {
         if (SocketManager.onUserStatusChanged != null) SocketManager.onUserStatusChanged = null
         if (SocketManager.onTypingIndicator != null) SocketManager.onTypingIndicator = null
-        if (SocketManager.onGroupTyping != null) SocketManager.onGroupTyping = null
         typingStopJob?.cancel()
-        groupTypingJobs.values.forEach { it.cancel() }
-        groupTypingJobs.clear()
-        groupTypingIds.clear()
-        _groupTypingNames.value = emptyList()
     }
 
     fun onUserTyping() {
+        if (isGroup) return // тайпинг в группах — Спринт 3 (нужен серверный broadcast)
         if (!SocketManager.isConnected()) return
         if (!typingStartSent) {
-            if (isGroup) SocketManager.sendGroupTyping(chatId, true)
-            else SocketManager.sendTypingStart(chatId)
+            SocketManager.sendTypingStart(chatId)
             typingStartSent = true
         }
         typingStopJob?.cancel()
@@ -624,8 +585,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun sendTypingStop() {
         if (typingStartSent && SocketManager.isConnected()) {
-            if (isGroup) SocketManager.sendGroupTyping(chatId, false)
-            else SocketManager.sendTypingStop(chatId)
+            SocketManager.sendTypingStop(chatId)
             typingStartSent = false
         }
         typingStopJob?.cancel()

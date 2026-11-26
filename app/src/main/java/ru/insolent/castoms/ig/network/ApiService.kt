@@ -1,33 +1,27 @@
 package ru.insolent.castoms.ig.network
 
-import androidx.annotation.Keep
-import com.google.gson.annotations.SerializedName
-import okhttp3.MultipartBody
-import okhttp3.ResponseBody
-import ru.insolent.castoms.ig.models.*
+import com.google.gson.JsonElement
 import retrofit2.Response
 import retrofit2.http.*
 import ru.insolent.castoms.ig.model.AppCheckVersion
 
 interface ApiService {
 
-    // Аутентификация
+    // === Аутентификация ===
     @POST("api/register")
     suspend fun register(@Body request: RegisterRequest): Response<AuthResponse>
 
     @POST("api/login")
     suspend fun login(@Body request: LoginRequest): Response<AuthResponse>
 
-    // Криптография
-    @POST("api/keys/upload")
-    suspend fun uploadKeys(@Body request: KeysUploadRequest): Response<KeysUploadResponse>
+    // === Профиль ===
+    @GET("api/myprofile")
+    suspend fun getMyProfile(): Response<ProfileResponse>
 
-    @GET("api/keys/{userId}/identity")
-    suspend fun getIdentityKey(@Path("userId") userId: String): Response<IdentityKeyResponse>
+    @PUT("api/myprofile")
+    suspend fun updateMyProfile(@Body request: UpdateProfileRequest): Response<ProfileResponse>
 
-    @GET("api/keys/{userId}")
-    suspend fun getKeysBundle(@Path("userId") userId: String): Response<DevicesBundleResponse>
-
+    // === Контакты и заявки ===
     @GET("api/users/search")
     suspend fun searchUsers(
         @Query("query") query: String,
@@ -35,7 +29,7 @@ interface ApiService {
     ): Response<List<UserSearchResult>>
 
     @GET("api/contacts")
-    suspend fun getMyContacts(): Response<List<ApiContact>>
+    suspend fun getMyContacts(@Query() userId: String): Response<List<ApiContact>>
 
     @POST("api/contacts")
     suspend fun addContact(@Body request: AddContactRequest): Response<AddContactResponse>
@@ -52,66 +46,39 @@ interface ApiService {
     @POST("api/friend-requests/respond")
     suspend fun respondToFriendRequest(@Body request: RespondRequestDto): Response<Any>
 
+    // === Ключи (мульти-девайс) ===
+    @POST("api/keys/upload")
+    suspend fun uploadKeys(@Body request: KeysUploadRequest): Response<KeysUploadResponse>
+
+    /** Бандлы ВСЕХ устройств пользователя */
+    @GET("api/keys/{userId}")
+    suspend fun getKeysBundle(@Path("userId") userId: String): Response<DevicesBundleResponse>
+
+    @GET("api/keys/{userId}/identity")
+    suspend fun getIdentityKey(@Path("userId") userId: String): Response<IdentityKeyResponse>
+
+    @GET("api/keys/count/remaining")
+    suspend fun getRemainingPreKeys(@Query("deviceId") deviceId: String? = null): Response<RemainingKeysResponse>
+
+    @POST("api/keys/one-time")
+    suspend fun uploadOneTimeKeys(@Body request: OneTimeKeysUploadRequest): Response<KeysUploadResponse>
+
+    // === Чаты и история ===
+    /** Мои чаты: собеседники + группы (для глобального догона) */
+    @GET("api/chats")
+    suspend fun getMyChats(): Response<List<String>>
 
     @GET("api/chats/{chatId}/messages")
     suspend fun getChatHistory(
         @Path("chatId") chatId: String,
         @Query("userId") userId: String,
-        @Query("since") since: Long? = null   // ← НОВОЕ: timestamp в мс
+        @Query("since") since: Long? = null
     ): Response<List<MessageDTO>>
 
     @GET("api/users/{userId}/status")
     suspend fun getUserStatus(@Path("userId") userId: String): Response<UserStatusDTO>
 
-    @GET("api/media/{fileId}")
-    suspend fun downloadMedia(
-        @Path("fileId") fileId: String,
-        @Header("Range") range: String? = null
-    ): Response<ResponseBody>
-
-    @Multipart
-    @POST("api/media/upload")
-    suspend fun uploadMedia(
-        @Query("fileId") fileId: String,
-        @Part file: MultipartBody.Part,
-        @Query("size") size: Long              // ← НОВОЕ
-    ): Response<UploadResponse>
-
-    @Headers("Accept-Encoding: identity")
-    @GET("api/apk/{version}")
-    suspend fun downloadApk(
-        @Path("version") version: String,
-        @Header("Range") range: String? = null
-    ): Response<ResponseBody>
-
-    @DELETE("api/media/{fileId}")
-    suspend fun deleteMedia(@Path("fileId") fileId: String): Response<okhttp3.ResponseBody>
-
-    @GET("api/updateapp")
-    suspend fun getCheckUpdate(): Response<AppCheckVersion>
-
-    @GET("api/myprofile")
-    suspend fun getMyProfile(): Response<UserProfileDto>
-
-    @PUT("api/myprofile")
-    suspend fun updateMyProfile(@Body request: UpdateProfileRequest): Response<UserProfileDto>
-
-    @POST("api/devices/register")
-    suspend fun registerDevice(@Body request: DeviceTokenRequest): Response<Any>
-
-    @DELETE("api/devices/{deviceId}")
-    suspend fun unregisterDevice(@Path("deviceId") deviceId: String): Response<Any>
-
-    @GET("api/keys/count/remaining")
-    suspend fun getRemainingPreKeys(): Response<RemainingKeysResponse>
-
-    @POST("api/keys/one-time")
-    suspend fun uploadOneTimeKeys(@Body request: OneTimeKeysUploadRequest): Response<Any>
-
-    @GET("api/chats")
-    suspend fun getMyChats(): Response<List<String>>
-
-    /** Группы создание информация  **/
+    // === Группы ===
     @POST("api/groups")
     suspend fun createGroup(@Body request: CreateGroupRequest): Response<GroupResponse>
 
@@ -122,43 +89,71 @@ interface ApiService {
     suspend fun getGroupMembers(@Path("groupId") groupId: String): Response<List<GroupMemberDto>>
 
     @POST("api/groups/{groupId}/members")
-    suspend fun addGroupMember(
-        @Path("groupId") groupId: String,
-        @Body body: Map<String, String>
-    ): Response<Any>
+    suspend fun addGroupMember(@Path("groupId") groupId: String, @Body body: Map<String, String>): Response<Any>
 
     @DELETE("api/groups/{groupId}/members/{userId}")
     suspend fun removeGroupMember(
         @Path("groupId") groupId: String,
         @Path("userId") userId: String
     ): Response<Any>
-    /** ------ **/
+
+    // === Устройства (пуши) ===
+    @POST("api/devices/register")
+    suspend fun registerDevice(@Body request: DeviceTokenRequest): Response<Any>
+
+    @DELETE("api/devices/{deviceId}")
+    suspend fun unregisterDevice(@Path("deviceId") deviceId: String): Response<Any>
+
+    // === Медиа ===
+    @Multipart
+    @POST("api/media/upload")
+    suspend fun uploadMedia(
+        @Query("fileId") fileId: String,
+        @Part file: okhttp3.MultipartBody.Part,
+        @Query("size") size: Long
+    ): Response<MediaUploadResponse>
+
+    @Headers("Accept-Encoding: identity")
+    @GET("api/media/{fileId}")
+    suspend fun downloadMedia(
+        @Path("fileId") fileId: String,
+        @Header("Range") range: String? = null
+    ): Response<okhttp3.ResponseBody>
+
+    @Headers("Accept-Encoding: identity")
+    @GET("api/apk/{version}")
+    suspend fun downloadApk(
+        @Path("version") version: String,
+        @Header("Range") range: String? = null
+    ): Response<okhttp3.ResponseBody>
+
+    @DELETE("api/media/{fileId}")
+    suspend fun deleteMedia(@Path("fileId") fileId: String): Response<Any>
+
+    // === Обновление приложения ===
+    @GET("api/updateapp")
+    suspend fun getCheckUpdate(): Response<AppCheckVersion>
 }
 
-// === МОДЕЛИ ДАННЫХ ===
+// ==================== МОДЕЛИ ДАННЫХ ====================
 
-data class UploadResponse(
-    val fileId: String? = null,
-    val size: Long? = null
-)
-
-data class IdentityKeyResponse(
-    val identityKey: String? = null
-)
-
-@Keep
 data class UserDto(
-    @SerializedName("id")
     val id: String,
-    @SerializedName("username")
     val username: String,
-    @SerializedName("displayName")
     val displayName: String?,
-    @SerializedName("avatarUrl")
     val avatarUrl: String?
 )
 
-// DTO для отправки токена
+data class ProfileResponse(
+    val id: String,
+    val username: String,
+    val email: String?,
+    val phone: String?,
+    val displayName: String?,
+    val avatarUrl: String?,
+    val status: String?
+)
+
 data class DeviceTokenRequest(
     val userId: String,
     val deviceId: String,
@@ -166,20 +161,13 @@ data class DeviceTokenRequest(
     val platform: String = "android"
 )
 
-@Keep
 data class FriendRequestDto(
-    @SerializedName("id")
     val id: String,
-    @SerializedName("sender")
     val sender: UserDto,
-    @SerializedName("createdAt")
     val createdAt: String
 )
 
-data class RespondRequestDto(
-    val requestId: String,
-    val status: String // "ACCEPTED" или "REJECTED"
-)
+data class RespondRequestDto(val requestId: String, val status: String)
 
 data class RegisterRequest(
     val username: String,
@@ -189,189 +177,52 @@ data class RegisterRequest(
     val lastName: String
 )
 
-data class LoginRequest(
-    val username: String,
-    val password: String
-)
+data class LoginRequest(val username: String, val password: String)
 
-@Keep
 data class AuthResponse(
-    @SerializedName("message")
     val message: String,
-    @SerializedName("token")
     val token: String,
-    @SerializedName("user")
     val user: UserData
 )
 
-@Keep
-data class UserData(
-    @SerializedName("id")
-    val id: String,
-    @SerializedName("username")
-    val username: String,
-    @SerializedName("email")
-    val email: String
+data class UserData(val id: String, val username: String, val email: String)
+
+data class UpdateProfileRequest(
+    val displayName: String? = null,
+    val phone: String? = null,
+    val avatarUrl: String? = null
 )
 
+// === Ключи: мульти-девайс ===
+data class OneTimeKey(val keyId: Int, val publicKey: String)
+
 data class KeysUploadRequest(
-    val deviceId: String,
+    val deviceId: String,               // ← мульти-девайс
     val userId: String,
     val identityKey: String,
     val signedPreKeyId: Int,
     val signedPreKeyPublic: String,
     val signedPreKeySig: String,
     val oneTimeKeys: List<OneTimeKey>,
-    val registrationId: Int  // ✅ Добавь это поле!
+    val registrationId: Int
 )
 
-@Keep
-data class UserSearchResult(
-    @SerializedName("id")
-    val id: String,
-    @SerializedName("username")
-    val username: String,
-    @SerializedName("displayName")
-    val displayName: String?,
-    @SerializedName("avatarUrl")
-    val avatarUrl: String?
-)
-
-@Keep
-data class ApiContact(
-    @SerializedName("id")
-    val id: String,
-    @SerializedName("username")
-    val username: String,
-    @SerializedName("displayName")
-    val displayName: String?,
-    @SerializedName("avatarUrl")
-    val avatarUrl: String?,
-    @SerializedName("status")
-    val status: String?
-)
-
-@Keep
-data class EncryptedPayloadDTO(
-    @SerializedName("type")
-    val type: Int,
-    @SerializedName("data")
-    val data: String
-)
-
-@Keep
-data class MessageDTO(
-    @SerializedName("id")
-    val id: String?,
-    @SerializedName("senderId")
-    val senderId: String,
-    @SerializedName("payload")
-    val payload: EncryptedPayloadDTO,  // ✅ Теперь объект, а не String
-    @SerializedName("timestamp")
-    val timestamp: Long,
-    @SerializedName("delivered")
-    val delivered: Boolean,
-    @SerializedName("isIncoming")
-    val isIncoming: Boolean
-)
-
-data class AddContactRequest(
-    val userId: String,
-    val contactUserId: String
-)
-
-@Keep
-data class AddContactResponse(
-    @SerializedName("success")
-    val success: Boolean,
-    @SerializedName("message")
-    val message: String
-)
-
-@Keep
 data class KeysUploadResponse(
-    @SerializedName("success")
     val success: Boolean,
-    @SerializedName("message")
     val message: String? = null,
-    @SerializedName("remaining")
     val remaining: Int? = null
 )
 
+data class RemainingKeysResponse(val remaining: Int, val deviceId: String? = null)
 
-
-@Keep
-data class UserStatusDTO(
-    @SerializedName("userId")
-    val userId: String,
-    @SerializedName("isOnline")
-    val isOnline: Boolean
-)
-
-// Data class для ответа сервера
-@Keep
-data class MediaUploadResponse(
-    @SerializedName("fileId")
-    val fileId: String,
-    @SerializedName("size")
-    val size: Long,
-    @SerializedName("uploadedAt")
-    val uploadedAt: Long
-)
-
-@Keep
-data class CreateGroupRequest(
-    @SerializedName("name")
-    val name: String,
-    @SerializedName("memberIds")
-    val memberIds: List<String>
-)
-
-@Keep
-data class GroupResponse(
-    @SerializedName("id")
-    val id: String,
-    @SerializedName("name")
-    val name: String,
-    @SerializedName("avatarUrl")
-    val avatarUrl: String? = null,
-    @SerializedName("createdById")
-    val createdById: String? = null,
-    @SerializedName("myRole")
-    val myRole: String? = null,
-    @SerializedName("members")
-    val members: List<GroupMemberDto> = emptyList()
-)
-
-@Keep
-data class GroupMemberDto(
-    @SerializedName("userId")
-    val userId: String,
-    @SerializedName("role")
-    val role: String? = null,
-    @SerializedName("username")
-    val username: String? = null,
-    @SerializedName("displayName")
-    val displayName: String? = null,
-    @SerializedName("avatarUrl")
-    val avatarUrl: String? = null
-)
-
-@Keep
-data class RemainingKeysResponse(
-    @SerializedName("remaining")
-    val remaining: Int
-)
-
-@Keep
 data class OneTimeKeysUploadRequest(
-    @SerializedName("oneTimeKeys")
-    val deviceId: String,
+    val deviceId: String,               // ← мульти-девайс
     val oneTimeKeys: List<OneTimeKey>
 )
 
-data class OneTimeKey(val keyId: Int, val publicKey: String)
+data class IdentityKeyResponse(val identityKey: String? = null)
 
+/** Бандл одного устройства */
 data class DeviceKeysBundle(
     val deviceId: String,
     val identityKey: String,
@@ -381,7 +232,68 @@ data class DeviceKeysBundle(
     val registrationId: Int,
     val oneTimeKeys: List<OneTimeKey> = emptyList()
 )
+
+/** Ответ GET /api/keys/{userId}: бандлы всех устройств */
 data class DevicesBundleResponse(val devices: List<DeviceKeysBundle>)
 
+/** Payload для конкретного устройства (личка) */
 data class DevicePayload(val deviceId: Int, val type: Int, val data: String)
+
+/** Payload для (участник × устройство) (группа) */
 data class GroupDevicePayload(val userId: String, val deviceId: Int, val type: Int, val data: String)
+
+// === Группы ===
+data class CreateGroupRequest(val name: String, val memberIds: List<String>)
+
+data class GroupResponse(
+    val id: String,
+    val name: String,
+    val avatarUrl: String? = null,
+    val createdById: String? = null,
+    val myRole: String? = null,
+    val members: List<GroupMemberDto> = emptyList()
+)
+
+data class GroupMemberDto(
+    val userId: String,
+    val role: String? = null,
+    val username: String? = null,
+    val displayName: String? = null,
+    val avatarUrl: String? = null
+)
+
+// === Прочее ===
+data class UserSearchResult(
+    val id: String,
+    val username: String,
+    val displayName: String?,
+    val avatarUrl: String?
+)
+
+data class ApiContact(
+    val id: String,
+    val username: String,
+    val displayName: String?,
+    val avatarUrl: String?,
+    val status: String?
+)
+
+data class UserStatusDTO(val userId: String, val isOnline: Boolean)
+
+/** payload — JsonElement: сервер шлёт как {type,data}, так и контейнеры {payloads:[...]} */
+data class MessageDTO(
+    val id: String?,
+    val senderId: String,
+    val payload: JsonElement,
+    val timestamp: Long,
+    val delivered: Boolean
+)
+
+data class AddContactRequest(val userId: String, val contactUserId: String)
+data class AddContactResponse(val success: Boolean, val message: String? = null)
+
+data class MediaUploadResponse(
+    val fileId: String,
+    val size: Long,
+    val uploadedAt: Long
+)

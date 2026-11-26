@@ -61,6 +61,24 @@ object MessageSyncer {
                 //    иначе сессия бросает DuplicateMessageException (old counter)
                 if (messageManager.getMessageById(messageId) != null) continue
 
+                // 🌟 Системное сообщение: { system: true, text } — не шифруется
+                val payloadObj0 = try {
+                    com.google.gson.JsonParser.parseString(Gson().toJson(dto.payload)).asJsonObject
+                } catch (e: Exception) { null }
+
+                if (payloadObj0 != null && payloadObj0.has("system")) {
+                    val sysText = payloadObj0.get("text").asString
+                    try {
+                        messageManager.saveIncomingMessage(
+                            chatId = chatId, senderId = dto.senderId, content = sysText,
+                            timestamp = dto.timestamp, messageId = messageId,
+                            messageType = "system", attachments = null
+                        )
+                        newCount++
+                    } catch (e: Exception) { /* дубликат */ }
+                    continue
+                }
+
                 try {
                     val payloadJson = Gson().toJson(dto.payload)
 
@@ -98,7 +116,7 @@ object MessageSyncer {
 
                     // Дешифруем сессией с (отправитель, ЕГО устройство)
                     val fromDeviceId = payloadObj0?.get("fromDeviceId")?.asString?.toIntOrNull() ?: 1
-                    val messageContent = decryptWithLazyInit(cryptoManager, payload, senderId, fromDeviceId)
+                    val messageContent = decryptWithLazyInit(cryptoManager, payload!!, senderId, fromDeviceId)
 
                     val attachments = messageContent.attachments
                     val messageType = when {
@@ -211,7 +229,6 @@ object MessageSyncer {
             val bundle = bundleResp.body()
             if (!bundleResp.isSuccessful || bundle == null) throw e
 
-            // Инициализируем сессии со ВСЕМИ устройствами отправителя
             cryptoManager.initializeSession(senderId, bundle)
             cryptoManager.decryptMessage(payload, senderId, senderDeviceId)
         }
