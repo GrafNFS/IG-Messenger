@@ -61,7 +61,7 @@ class MediaUploadWorker(
         // 🌟 Групповое сообщение. MessageManager хранит EncryptedPayload как JSON:
         //    {"type":-1,"data":"{payloads:[...]}"} — распознаём обе формы, шлём group_message.
         val gson = com.google.gson.Gson()
-        val groupPayloads: List<ru.insolent.castoms.ig.network.GroupPayload>? = try {
+        val containerEntries: List<com.google.gson.JsonObject>? = try {
             val obj = com.google.gson.JsonParser.parseString(encryptedPayloadJson).asJsonObject
             val target = when {
                 obj.has("payloads") -> obj
@@ -69,15 +69,12 @@ class MediaUploadWorker(
                     com.google.gson.JsonParser.parseString(obj.get("data").asString).asJsonObject
                 else -> null
             }
-            if (target != null && target.has("payloads")) {
-                target.getAsJsonArray("payloads").map {
-                    val e = it.asJsonObject
-                    ru.insolent.castoms.ig.network.GroupPayload(
-                        e.get("userId").asString, e.get("type").asInt, e.get("data").asString
-                    )
-                }
-            } else null
+            target?.takeIf { it.has("payloads") }
+                ?.getAsJsonArray("payloads")
+                ?.map { it.asJsonObject }
         } catch (_: Exception) { null }
+
+        val isGroupContainer = containerEntries?.firstOrNull()?.has("userId") == true
         val payloadObject = gson.fromJson(encryptedPayloadJson, EncryptedPayload::class.java)
         val tempFilesList = mutableListOf<File>()
         var uploadAndSendSucceeded = false   // ← НОВЫЙ ФЛАГ
@@ -143,21 +140,35 @@ class MediaUploadWorker(
             }
 
             Log.d("MediaUploadWorker", "📨 Все файлы на сервере. Отправляем сокет...")
-            val isSocketSent = if (groupPayloads != null) {
-                SocketManager.sendGroupMessage(contactId, groupPayloads, messageId, typeMsg)
+            val isSocketSent = if (containerEntries != null) {
+                if (isGroupContainer) {
+                    SocketManager.sendGroupMessage(
+                        contactId,
+                        containerEntries.map {
+                            ru.insolent.castoms.ig.network.GroupDevicePayload(
+                                it.get("userId").asString, it.get("deviceId").asInt,
+                                it.get("type").asInt, it.get("data").asString
+                            )
+                        },
+                        messageId, typeMsg
+                    )
+                } else {
+                    SocketManager.sendEncryptedMessage(
+                        contactId,
+                        containerEntries.map {
+                            ru.insolent.castoms.ig.network.DevicePayload(
+                                it.get("deviceId").asInt, it.get("type").asInt, it.get("data").asString
+                            )
+                        },
+                        messageId, typeMsg
+                    )
+                }
             } else {
-                SocketManager.sendEncryptedMessage(contactId, payloadObject, messageId, typeMsg)
-            }
-            Log.d("MediaUploadWorker", "🔌 Статус отправки сокета: $isSocketSent")
-
-            if (isSocketSent) {
-                updateMessageStatus(contactId, messageId, MessageStatus.SENT)
-                uploadAndSendSucceeded = true
-                Log.d("MediaUploadWorker", "🎉 Воркер успешно выполнил всю работу!")
-                return Result.success()
-            } else {
-                updateMessageStatus(contactId, messageId, MessageStatus.FAILED)
-                return Result.failure()
+                val payload = gson.fromJson(encryptedPayloadJson, EncryptedPayload::class.java)
+                SocketManager.sendEncryptedMessage(
+                    contactId, listOf(ru.insolent.castoms.ig.network.DevicePayload(1, payload.type, payload.data)),
+                    messageId, typeMsg
+                )
             }
 
         } catch (e: Exception) {

@@ -138,7 +138,7 @@ class SplashActivity : AppCompatActivity() {
         progDonwloadApk.isIndeterminate = true
         lifecycleScope.launch {
             withContext(Dispatchers.IO){
-                check.downloadapk(this@SplashActivity,
+                check.downloadApk(this@SplashActivity,
                     update!!.fileSize,
                     update!!.latestVersion,
                     onProgressUpdate = {

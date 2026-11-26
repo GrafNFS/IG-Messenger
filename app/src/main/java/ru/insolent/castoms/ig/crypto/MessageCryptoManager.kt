@@ -3,7 +3,6 @@ package ru.insolent.castoms.ig.crypto
 import android.content.Context
 import android.util.Base64
 import android.util.Log
-import ru.insolent.castoms.ig.network.KeysBundle
 import org.signal.libsignal.protocol.*
 import org.signal.libsignal.protocol.ecc.Curve
 import org.signal.libsignal.protocol.ecc.ECKeyPair
@@ -11,6 +10,8 @@ import org.signal.libsignal.protocol.message.*
 import org.signal.libsignal.protocol.state.*
 import org.signal.libsignal.protocol.util.KeyHelper
 import ru.insolent.castoms.ig.database.CryptoDatabase
+import ru.insolent.castoms.ig.network.DeviceKeysBundle
+import ru.insolent.castoms.ig.network.DevicesBundleResponse
 import java.nio.charset.StandardCharsets
 
 class MessageCryptoManager(
@@ -113,7 +114,7 @@ class MessageCryptoManager(
         return IdentityKeyPair(identityKey, keyPair.privateKey)
     }
 
-    fun initializeSession(remoteUserId: String, bundle: KeysBundle) {
+    fun initializeSession(remoteUserId: String, bundle: DevicesBundleResponse) {
         try {
             Log.d(TAG, "🔄 Initializing session for $remoteUserId...")
 
@@ -165,7 +166,7 @@ class MessageCryptoManager(
         }
     }
 
-    fun encryptMessage(content: MessageContent, remoteUserId: String): EncryptedPayload {
+    fun encryptMessage(content: MessageContent, remoteUserId: String, remoteDeviceId: Int): EncryptedPayload {
         try {
             Log.d(TAG, "🔒 Encrypting message for $remoteUserId")
             val address = SignalProtocolAddress(remoteUserId, localDeviceId)

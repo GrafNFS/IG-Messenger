@@ -13,63 +13,89 @@ import org.signal.libsignal.protocol.ecc.ECKeyPair
 import org.signal.libsignal.protocol.state.SignedPreKeyRecord
 import org.signal.libsignal.protocol.util.KeyHelper
 import ru.insolent.castoms.ig.network.*
+import ru.insolent.castoms.ig.utils.SessionManager
 import java.util.Date
 
+/**
+ * Управление ключами Signal Protocol устройства.
+ * 🌟 МУЛЬТИ-ДЕВАЙС: у каждого устройства свой identity-key и registrationId.
+ * Ключи хранятся с префиксом "<userId>_<cryptoDeviceId>_"; легаси-ключи
+ * (без префикса) автоматически переносятся на это устройство при первом запуске.
+ */
 class CryptoManager(private val context: Context) {
 
     companion object {
         private const val TAG = "CryptoManager"
-        private const val REFILL_THRESHOLD = 30  // ниже этого остатка на сервере — пополняем
-        private const val BATCH_SIZE = 25        // сколько OTK генерим за раз
-        private const val MAX_LOCAL_OTK = 300    // локальный потолок, старые подрезаем
+        private const val REFILL_THRESHOLD = 30
+        private const val BATCH_SIZE = 25
+        private const val MAX_LOCAL_OTK = 300
     }
 
-    // ✅ Приватные ключи теперь шифруются мастер-ключом Android Keystore
+    private val sessionManager = SessionManager(context)
+
+    /** Числовой id устройства для Signal Protocol (int) */
+    val deviceId: Int = sessionManager.getCryptoDeviceId()
+
     private val secureStore = SecureKeyStore(context)
 
-    /**
-     * Генерация и загрузка ключей на сервер.
-     * Вызывается ОДИН РАЗ при регистрации или первом входе на устройстве.
-     */
+    /** Префикс ключей хранилища для пары (user, device) */
+    private fun prefix(userId: String) = "${userId}_${deviceId}_"
+
+    init {
+        migrateLegacyKeysIfNeeded()
+    }
+
+    /** Перенос легаси-ключей (формат до мульти-девайса) на это устройство */
+    private fun migrateLegacyKeysIfNeeded() {
+        // Нужен userId для префикса — берём из сессии; если нет, миграция
+        // произойдёт при первом generateAndUploadKeys
+        val userId = sessionManager.getUserId() ?: return
+        val newPrefix = prefix(userId)
+
+        val legacyIdentity = secureStore.getString("${userId}_identity_private", null)
+        val newIdentity = secureStore.getString("${newPrefix}identity_private", null)
+        if (legacyIdentity == null || newIdentity != null) return
+
+        secureStore.getString("${userId}_identity_public", null)?.let {
+            secureStore.putString("${newPrefix}identity_public", it)
+        }
+        secureStore.getString("${userId}_signed_prekey_record", null)?.let {
+            secureStore.putString("${newPrefix}signed_prekey_record", it)
+        }
+        secureStore.getString("${userId}_one_time_keys", null)?.let {
+            secureStore.putString("${newPrefix}one_time_keys", it)
+        }
+        secureStore.putInt("${newPrefix}registration_id",
+            secureStore.getInt("${userId}_registration_id", -1))
+        secureStore.putString("${newPrefix}identity_private", legacyIdentity)
+        Log.i(TAG, "🔁 Migrated legacy keys to device $deviceId for $userId")
+    }
+
+    /** Генерация и загрузка ключей этого устройства */
     suspend fun generateAndUploadKeys(userId: String): Boolean = withContext(Dispatchers.IO) {
         try {
             val registrationId = KeyHelper.generateRegistrationId(false)
-
-            // 1. Identity Keys
             val identityKeyPair = generateIdentityKeyPair()
-
-            // 2. Signed PreKey
             val signedPreKeyId = 1
             val signedPreKeyPair: ECKeyPair = Curve.generateKeyPair()
             val signedPreKeySignature = identityKeyPair.privateKey.calculateSignature(
                 signedPreKeyPair.publicKey.serialize()
             )
-
-            // 3. 30 One-Time PreKeys
             val oneTimeKeys = mutableListOf<OneTimeKey>()
             val oneTimeKeyPairs = mutableListOf<Pair<Int, ECKeyPair>>()
             for (i in 1..30) {
                 val keyPair: ECKeyPair = Curve.generateKeyPair()
                 oneTimeKeyPairs.add(i to keyPair)
                 oneTimeKeys.add(
-                    OneTimeKey(
-                        keyId = i,
-                        publicKey = Base64.encodeToString(keyPair.publicKey.serialize(), Base64.NO_WRAP)
-                    )
+                    OneTimeKey(i, Base64.encodeToString(keyPair.publicKey.serialize(), Base64.NO_WRAP))
                 )
             }
 
-            // 4. Сохраняем ВСЕ приватные ключи ЛОКАЛЬНО (зашифрованно)
-            val signedPreKeyRecord = SignedPreKeyRecord(
-                signedPreKeyId,
-                Date().time,
-                signedPreKeyPair,
-                signedPreKeySignature
-            )
+            val signedPreKeyRecord = SignedPreKeyRecord(signedPreKeyId, Date().time, signedPreKeyPair, signedPreKeySignature)
             saveLocalKeys(userId, identityKeyPair, signedPreKeyRecord, oneTimeKeyPairs, registrationId)
 
-            // 5. Публичные ключи — на сервер
             val request = KeysUploadRequest(
+                deviceId = deviceId.toString(),
                 userId = userId,
                 identityKey = Base64.encodeToString(identityKeyPair.publicKey.serialize(), Base64.NO_WRAP),
                 signedPreKeyId = signedPreKeyId,
@@ -79,74 +105,54 @@ class CryptoManager(private val context: Context) {
                 registrationId = registrationId
             )
 
-            val response = NetworkClient.apiService.uploadKeys(request)
-            response.isSuccessful
-
+            NetworkClient.apiService.uploadKeys(request).isSuccessful
         } catch (e: Exception) {
             Log.e(TAG, "generateAndUploadKeys failed", e)
             false
         }
     }
 
-    /**
-     * РОТАЦИЯ one-time prekeys.
-     * Проверяет остаток на сервере (GET /api/keys/count/remaining) и пополняет
-     * запас пачкой BATCH_SIZE, если остаток ниже REFILL_THRESHOLD.
-     *
-     * Вызывается автоматически при подключении сокета и раз в сутки воркером.
-     */
+    /** Ротация one-time prekeys ЭТОГО устройства */
     suspend fun refillOneTimePreKeysIfNeeded(userId: String): Boolean = withContext(Dispatchers.IO) {
         try {
-            val countResp = NetworkClient.apiService.getRemainingPreKeys()
-            if (!countResp.isSuccessful) return@withContext false
-            val remaining = countResp.body()?.remaining ?: return@withContext false
+            val resp = NetworkClient.apiService.getRemainingPreKeys(deviceId.toString())
+            if (!resp.isSuccessful) return@withContext false
+            val remaining = resp.body()?.remaining ?: return@withContext false
 
             if (remaining >= REFILL_THRESHOLD) {
-                Log.d(TAG, "OTK supply OK ($remaining on server)")
+                Log.d(TAG, "OTK supply OK ($remaining on server, device $deviceId)")
                 return@withContext true
             }
 
             Log.i(TAG, "⚠️ OTK supply low ($remaining), refilling +$BATCH_SIZE...")
+            val registrationId = secureStore.getInt("${prefix(userId)}registration_id", -1)
+            if (registrationId == -1) return@withContext false
 
-            val registrationId = secureStore.getInt("${userId}_registration_id", -1)
-            if (registrationId == -1) {
-                Log.e(TAG, "No stored registrationId — cannot refill. Run generateAndUploadKeys.")
-                return@withContext false
-            }
-
-            // Генерируем новую пачку с keyId от max+1
             val startId = getNextOneTimeKeyId(userId)
             val newPublicKeys = mutableListOf<OneTimeKey>()
             val newPrivateKeys = mutableListOf<Pair<Int, ECKeyPair>>()
             for (i in 0 until BATCH_SIZE) {
                 val keyId = startId + i
                 val keyPair = Curve.generateKeyPair()
-                newPublicKeys.add(
-                    OneTimeKey(keyId, Base64.encodeToString(keyPair.publicKey.serialize(), Base64.NO_WRAP))
-                )
+                newPublicKeys.add(OneTimeKey(keyId, Base64.encodeToString(keyPair.publicKey.serialize(), Base64.NO_WRAP)))
                 newPrivateKeys.add(keyId to keyPair)
             }
-
-            // Сохраняем приватные части локально (зашифрованно), ДО загрузки на сервер
             appendOneTimeKeys(userId, newPrivateKeys)
 
-            // Вариант A: лёгкий эндпоинт только с OTK (см. PATCHES.md, серверный сниппет)
-            val otkResp = NetworkClient.apiService.uploadOneTimeKeys(OneTimeKeysUploadRequest(newPublicKeys))
+            val otkResp = NetworkClient.apiService.uploadOneTimeKeys(OneTimeKeysUploadRequest(deviceId.toString(), newPublicKeys))
             if (otkResp.isSuccessful) {
-                Log.i(TAG, "✅ Uploaded ${newPublicKeys.size} OTKs (light endpoint)")
+                Log.i(TAG, "✅ Uploaded ${newPublicKeys.size} OTKs (light, device $deviceId)")
                 return@withContext true
             }
 
-            // Вариант B (фолбэк): полный uploadKeys — серверная версия мержит OTK, не затирая
-            val identityPublic = secureStore.getString("${userId}_identity_public", null)
-            val signedRecordB64 = secureStore.getString("${userId}_signed_prekey_record", null)
-            if (identityPublic == null || signedRecordB64 == null) {
-                Log.e(TAG, "Missing identity/signed prekey for fallback upload")
-                return@withContext false
-            }
+            // Фолбэк: полный uploadKeys (сервер мержит OTK)
+            val identityPublic = secureStore.getString("${prefix(userId)}identity_public", null)
+            val signedRecordB64 = secureStore.getString("${prefix(userId)}signed_prekey_record", null)
+            if (identityPublic == null || signedRecordB64 == null) return@withContext false
             val signedRecord = SignedPreKeyRecord(Base64.decode(signedRecordB64, Base64.NO_WRAP))
 
             val request = KeysUploadRequest(
+                deviceId = deviceId.toString(),
                 userId = userId,
                 identityKey = identityPublic,
                 signedPreKeyId = signedRecord.id,
@@ -155,17 +161,14 @@ class CryptoManager(private val context: Context) {
                 oneTimeKeys = newPublicKeys,
                 registrationId = registrationId
             )
-            val ok = NetworkClient.apiService.uploadKeys(request).isSuccessful
-            if (ok) Log.i(TAG, "✅ Uploaded ${newPublicKeys.size} OTKs (fallback full upload)")
-            ok
-
+            NetworkClient.apiService.uploadKeys(request).isSuccessful
         } catch (e: Exception) {
             Log.e(TAG, "refillOneTimePreKeysIfNeeded failed", e)
             false
         }
     }
 
-    // ==================== Локальное хранение (зашифрованное) ====================
+    // ==================== Локальное хранение (зашифрованное, per-device) ====================
 
     private fun saveLocalKeys(
         userId: String,
@@ -174,16 +177,13 @@ class CryptoManager(private val context: Context) {
         oneTimeKeyPairs: List<Pair<Int, ECKeyPair>>,
         registrationId: Int
     ) {
-        secureStore.putString("${userId}_identity_private",
-            Base64.encodeToString(identityKeyPair.privateKey.serialize(), Base64.NO_WRAP))
-        secureStore.putString("${userId}_identity_public",
-            Base64.encodeToString(identityKeyPair.publicKey.serialize(), Base64.NO_WRAP))
-        secureStore.putString("${userId}_signed_prekey_record",
-            Base64.encodeToString(signedPreKeyRecord.serialize(), Base64.NO_WRAP))
-        secureStore.putString("${userId}_one_time_keys", oneTimeKeysToJson(oneTimeKeyPairs))
-        secureStore.putInt("${userId}_registration_id", registrationId)
-
-        Log.d(TAG, "✅ Saved encrypted keys for $userId (${oneTimeKeyPairs.size} OTPs)")
+        val p = prefix(userId)
+        secureStore.putString("${p}identity_private", Base64.encodeToString(identityKeyPair.privateKey.serialize(), Base64.NO_WRAP))
+        secureStore.putString("${p}identity_public", Base64.encodeToString(identityKeyPair.publicKey.serialize(), Base64.NO_WRAP))
+        secureStore.putString("${p}signed_prekey_record", Base64.encodeToString(signedPreKeyRecord.serialize(), Base64.NO_WRAP))
+        secureStore.putString("${p}one_time_keys", oneTimeKeysToJson(oneTimeKeyPairs))
+        secureStore.putInt("${p}registration_id", registrationId)
+        Log.d(TAG, "✅ Saved encrypted keys for $userId device $deviceId")
     }
 
     private fun oneTimeKeysToJson(keys: List<Pair<Int, ECKeyPair>>): String {
@@ -196,9 +196,9 @@ class CryptoManager(private val context: Context) {
         return arr.toString()
     }
 
-    /** Добавляет новые OTK к существующим и подрезает старые сверх MAX_LOCAL_OTK */
     private fun appendOneTimeKeys(userId: String, newKeys: List<Pair<Int, ECKeyPair>>) {
-        val existingJson = secureStore.getString("${userId}_one_time_keys", "[]") ?: "[]"
+        val p = prefix(userId)
+        val existingJson = secureStore.getString("${p}one_time_keys", "[]") ?: "[]"
         val arr = try { JSONArray(existingJson) } catch (e: Exception) { JSONArray() }
 
         for ((keyId, keyPair) in newKeys) {
@@ -207,20 +207,17 @@ class CryptoManager(private val context: Context) {
                 .put("private", Base64.encodeToString(keyPair.privateKey.serialize(), Base64.NO_WRAP)))
         }
 
-        // Подрезаем самые старые (уже выданные сервером и не нужные локально)
         val trimmed = if (arr.length() > MAX_LOCAL_OTK) {
             val keep = JSONArray()
             for (i in arr.length() - MAX_LOCAL_OTK until arr.length()) keep.put(arr.getJSONObject(i))
-            Log.d(TAG, "Pruned old OTKs to $MAX_LOCAL_OTK")
             keep
         } else arr
 
-        secureStore.putString("${userId}_one_time_keys", trimmed.toString())
-        Log.d(TAG, "✅ Stored ${newKeys.size} new OTKs (local total: ${trimmed.length()})")
+        secureStore.putString("${p}one_time_keys", trimmed.toString())
     }
 
     private fun getNextOneTimeKeyId(userId: String): Int {
-        val existingJson = secureStore.getString("${userId}_one_time_keys", "[]") ?: "[]"
+        val existingJson = secureStore.getString("${prefix(userId)}one_time_keys", "[]") ?: "[]"
         return try {
             val arr = JSONArray(existingJson)
             var maxId = 0
@@ -228,9 +225,7 @@ class CryptoManager(private val context: Context) {
                 maxId = maxOf(maxId, arr.getJSONObject(i).getInt("id"))
             }
             maxId + 1
-        } catch (e: Exception) {
-            1
-        }
+        } catch (e: Exception) { 1 }
     }
 
     private fun generateIdentityKeyPair(): IdentityKeyPair {

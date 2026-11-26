@@ -31,7 +31,8 @@ import ru.insolent.castoms.ig.database.AttachmentEntity
 import ru.insolent.castoms.ig.database.MessageEntity
 import ru.insolent.castoms.ig.database.MessageStatus
 import ru.insolent.castoms.ig.database.MessageWithAttachments
-import ru.insolent.castoms.ig.network.GroupPayload
+import ru.insolent.castoms.ig.network.DevicePayload
+import ru.insolent.castoms.ig.network.GroupDevicePayload
 import ru.insolent.castoms.ig.network.NetworkClient
 import ru.insolent.castoms.ig.network.SocketManager
 import ru.insolent.castoms.ig.utils.GroupManager
@@ -104,10 +105,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     // ==================== ГРУППЫ: pairwise-шифрование ====================
 
-    /** Сессия с участником, с ленивой инициализацией по key bundle */
-    private suspend fun encryptWithLazySession(content: MessageContent, remoteUserId: String): EncryptedPayload {
+    /** Сессия с (участник, конкретное устройство), ленивая init по bundle */
+    private suspend fun encryptWithLazySession(content: MessageContent, remoteUserId: String, remoteDeviceId: Int): EncryptedPayload {
         return try {
-            cryptoManager.encryptMessage(content, remoteUserId)
+            cryptoManager.encryptMessage(content, remoteUserId, remoteDeviceId)
         } catch (e: Exception) {
             val needInit = e is org.signal.libsignal.protocol.NoSessionException ||
                     (e is IllegalStateException && e.message?.contains("Session not ready") == true)
@@ -115,17 +116,36 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             val bundleResp = NetworkClient.apiService.getKeysBundle(remoteUserId)
             val bundle = bundleResp.body() ?: throw e
             cryptoManager.initializeSession(remoteUserId, bundle)
-            cryptoManager.encryptMessage(content, remoteUserId)
+            cryptoManager.encryptMessage(content, remoteUserId, remoteDeviceId)
         }
     }
 
-    /** Шифруем контент ОТДЕЛЬНО для каждого участника группы (вариант А) */
-    private suspend fun buildGroupPayloads(content: MessageContent): List<GroupPayload> {
-        val members = groupManager.getMembers(chatId).filter { it.userId != myId }
-        return members.map { m ->
-            val p = encryptWithLazySession(content, m.userId)
-            GroupPayload(m.userId, p.type, p.data)
+    /** Личка: шифруем контент для КАЖДОГО устройства собеседника */
+    private suspend fun encryptForUserDevices(content: MessageContent, targetUserId: String): List<DevicePayload> {
+        val resp = NetworkClient.apiService.getKeysBundle(targetUserId)
+        val devices = resp.body()?.devices ?: throw IllegalStateException("Keys not found for $targetUserId")
+        return devices.map { d ->
+            val devId = d.deviceId.toInt()
+            val p = encryptWithLazySession(content, targetUserId, devId)
+            DevicePayload(devId, p.type, p.data)
         }
+    }
+
+    /** Группа: entries по каждому (участник × устройство) — pairwise */
+    private suspend fun buildGroupPayloads(content: MessageContent): List<GroupDevicePayload> {
+        val members = groupManager.getMembers(chatId).filter { it.userId != myId }
+        val out = mutableListOf<GroupDevicePayload>()
+        for (m in members) {
+            val devices = try {
+                NetworkClient.apiService.getKeysBundle(m.userId).body()?.devices
+            } catch (e: Exception) { null } ?: continue
+            for (d in devices) {
+                val devId = d.deviceId.toInt()
+                val p = encryptWithLazySession(content, m.userId, devId)
+                out.add(GroupDevicePayload(m.userId, devId, p.type, p.data))
+            }
+        }
+        out
     }
 
     // ==================== Сессия и ключи ====================
@@ -173,41 +193,33 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 replyToSenderName = replyToSenderName,
                 replyToContent = replyToContent
             )
-            val messageId: String
-
+            // 🌟 Мульти-девайс: шифруем для КАЖДОГО устройства получателя(ей).
+            // Контейнер {payloads:[...]} храним в БД — ретрай без повторного шифрования.
+            val payloadsGroup: List<GroupDevicePayload>?
+            val payloadsDirect: List<DevicePayload>?
             if (isGroup) {
-                // Шифруем для каждого участника и храним контейнер — тогда ретрай
-                // сможет переотправить без повторного шифрования
-                val payloads = buildGroupPayloads(content)
-                val container = com.google.gson.Gson().toJson(mapOf("payloads" to payloads))
-                // saveOutgoingMessage принимает EncryptedPayload: контейнер кладём в data,
-                // type=-1 — маркер группового сообщения (единый формат с медиа в группах).
-                messageId = messageManager.saveOutgoingMessage(
-                    chatId = chatId, content = text, myId = myId,
-                    encryptedPayload = EncryptedPayload(type = -1, data = container), status = MessageStatus.SENDING,
-                    replyToMessageId = replyToMessageId,
-                    replyToSenderName = replyToSenderName,
-                    replyToContent = replyToContent
-                )
-                val sent = SocketManager.sendGroupMessage(chatId, payloads, messageId, "text")
-                messageManager.updateStatus(chatId, messageId, if (sent) MessageStatus.SENT else MessageStatus.FAILED)
-                return@withContext sent
+                payloadsGroup = buildGroupPayloads(content)
+                payloadsDirect = null
+            } else {
+                payloadsGroup = null
+                payloadsDirect = encryptForUserDevices(content, chatId)
             }
+            val container = com.google.gson.Gson().toJson(mapOf("payloads" to (payloadsGroup ?: payloadsDirect!!)))
 
-            val encrypted = cryptoManager.encryptMessage(content, chatId)
-
-            messageId = messageManager.saveOutgoingMessage(
-                chatId = chatId,
-                content = text,
-                myId = myId,
-                encryptedPayload = encrypted,
+            val messageId = messageManager.saveOutgoingMessage(
+                chatId = chatId, content = text, myId = myId,
+                encryptedPayload = EncryptedPayload(type = -1, data = container),
                 status = MessageStatus.SENDING,
                 replyToMessageId = replyToMessageId,
                 replyToSenderName = replyToSenderName,
                 replyToContent = replyToContent
             )
 
-            val sent = SocketManager.sendEncryptedMessage(chatId, encrypted, messageId, "text")
+            val sent = if (isGroup) {
+                SocketManager.sendGroupMessage(chatId, payloadsGroup!!, messageId, "text")
+            } else {
+                SocketManager.sendEncryptedMessage(chatId, payloadsDirect!!, messageId, "text")
+            }
             messageManager.updateStatus(chatId, messageId, if (sent) MessageStatus.SENT else MessageStatus.FAILED)
             sent
         } catch (e: Exception) {
@@ -219,8 +231,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun sendEdit(messageId: String, text: String): Boolean = withContext(Dispatchers.IO) {
         try {
             val actionContent = MessageContent(text = text, action = "edit", targetMessageId = messageId)
-            val encrypted = cryptoManager.encryptMessage(actionContent, chatId)
-            SocketManager.sendMessageAction(chatId, encrypted, messageId)
+            val payloads = encryptForUserDevices(actionContent, chatId)
+            SocketManager.sendMessageAction(chatId, payloads, messageId)
             messageManager.updateMessageText(messageId, text)
             true
         } catch (e: Exception) {
@@ -233,8 +245,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         try {
             if (message.status != MessageStatus.FAILED) {
                 val actionContent = MessageContent(action = "delete", targetMessageId = message.messageId)
-                val encrypted = cryptoManager.encryptMessage(actionContent, chatId)
-                SocketManager.sendMessageAction(chatId, encrypted, message.messageId)
+                val payloads = encryptForUserDevices(actionContent, chatId)
+                SocketManager.sendMessageAction(chatId, payloads, message.messageId)
             }
             messageManager.deleteMessage(message.messageId)
         } catch (e: Exception) {
@@ -244,13 +256,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     suspend fun retryMessage(message: MessageEntity) = withContext(Dispatchers.IO) {
         try {
-            // 🌟 Групповой контейнер {payloads:[...]} — шлём через group_message
-            val groupPayloads = parseGroupPayloads(message.encryptedPayload)
-            val sent = if (groupPayloads != null) {
-                SocketManager.sendGroupMessage(chatId, groupPayloads, message.messageId, "text")
-            } else {
-                val payload = Gson().fromJson(message.encryptedPayload, EncryptedPayload::class.java)
-                SocketManager.sendEncryptedMessage(chatId, payload, message.messageId, "text")
+            // 🌟 Контейнер {payloads:[...]} — личка или группа по наличию userId в entry
+            val groupPayloads = parseGroupDevicePayloads(message.encryptedPayload)
+            val devicePayloads = parseDevicePayloads(message.encryptedPayload)
+            val sent = when {
+                isGroup && groupPayloads != null ->
+                    SocketManager.sendGroupMessage(chatId, groupPayloads, message.messageId, "text")
+                devicePayloads != null ->
+                    SocketManager.sendEncryptedMessage(chatId, devicePayloads, message.messageId, "text")
+                else -> {
+                    val payload = Gson().fromJson(message.encryptedPayload, EncryptedPayload::class.java)
+                    SocketManager.sendEncryptedMessage(chatId, listOf(DevicePayload(1, payload.type, payload.data)), message.messageId, "text")
+                }
             }
             messageManager.updateStatus(chatId, message.messageId, if (sent) MessageStatus.SENT else MessageStatus.FAILED)
         } catch (e: Exception) {
@@ -321,16 +338,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
                 val messageContent = MessageContent(text = caption, attachments = attachments)
 
-                // 🌟 Группа: шифруем контент для каждого участника, сохраняем контейнер
-                //    {payloads:[...]} — MediaUploadWorker определит формат и пошлёт group_message
+                // 🌟 Мульти-девайс: контейнер {payloads:[...]} всегда (личка — на устройства,
+                //    группа — на участник×устройство). MediaUploadWorker определит формат.
                 val encryptedPayload: EncryptedPayload = if (isGroup) {
                     val payloads = buildGroupPayloads(messageContent)
-                    EncryptedPayload(
-                        type = -1, // маркер: не настоящий ciphertext
-                        data = com.google.gson.Gson().toJson(mapOf("payloads" to payloads))
-                    )
+                    EncryptedPayload(type = -1, data = com.google.gson.Gson().toJson(mapOf("payloads" to payloads)))
                 } else {
-                    cryptoManager.encryptMessage(messageContent, chatId)
+                    val payloads = encryptForUserDevices(messageContent, chatId)
+                    EncryptedPayload(type = -1, data = com.google.gson.Gson().toJson(mapOf("payloads" to payloads)))
                 }
 
                 val messageType = when {
@@ -411,16 +426,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
             val messageContent = MessageContent(text = "", attachments = listOf(attachment))
 
-            // 🌟 Группа: шифруем для каждого участника, сохраняем контейнер (type=-1).
-            //    MediaUploadWorker распознает формат и пошлёт group_message.
+            // 🌟 Мульти-девайс контейнер (так же, как sendMedia); type=-1 — маркер
             val encryptedPayload: EncryptedPayload = if (isGroup) {
                 val payloads = buildGroupPayloads(messageContent)
-                EncryptedPayload(
-                    type = -1,
-                    data = com.google.gson.Gson().toJson(mapOf("payloads" to payloads))
-                )
+                EncryptedPayload(type = -1, data = com.google.gson.Gson().toJson(mapOf("payloads" to payloads)))
             } else {
-                cryptoManager.encryptMessage(messageContent, chatId)
+                val payloads = encryptForUserDevices(messageContent, chatId)
+                EncryptedPayload(type = -1, data = com.google.gson.Gson().toJson(mapOf("payloads" to payloads)))
             }
 
             messageManager.saveOutgoingMessage(
@@ -505,13 +517,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             messageManager.getPendingMessages(chatId).first().let { pending ->
                 for (msg in pending) {
                     try {
-                        // 🌟 Групповой контейнер {payloads:[...]} — шлём group_message
-                        val groupPayloads = parseGroupPayloads(msg.encryptedPayload)
-                        val sent = if (groupPayloads != null) {
-                            SocketManager.sendGroupMessage(chatId, groupPayloads, msg.messageId, msg.messageType)
-                        } else {
-                            val payload = Gson().fromJson(msg.encryptedPayload, EncryptedPayload::class.java)
-                            SocketManager.sendEncryptedMessage(chatId, payload, msg.messageId, msg.messageType)
+                        // 🌟 Контейнер {payloads:[...]} — личка или группа по userId в entry
+                        val groupPayloads = parseGroupDevicePayloads(msg.encryptedPayload)
+                        val devicePayloads = parseDevicePayloads(msg.encryptedPayload)
+                        val sent = when {
+                            isGroup && groupPayloads != null ->
+                                SocketManager.sendGroupMessage(chatId, groupPayloads, msg.messageId, msg.messageType)
+                            devicePayloads != null ->
+                                SocketManager.sendEncryptedMessage(chatId, devicePayloads, msg.messageId, msg.messageType)
+                            else -> {
+                                val payload = Gson().fromJson(msg.encryptedPayload, EncryptedPayload::class.java)
+                                SocketManager.sendEncryptedMessage(chatId, listOf(DevicePayload(1, payload.type, payload.data)), msg.messageId, msg.messageType)
+                            }
                         }
                         messageManager.updateStatus(chatId, msg.messageId, if (sent) MessageStatus.SENT else MessageStatus.FAILED)
                     } catch (e: Exception) {
@@ -639,13 +656,25 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Парсинг группового контейнера {payloads:[...]}; null — если не групповой.
-     * Понимает две формы хранения:
-     *  1) {"payloads":[...]} — напрямую;
-     *  2) {"type":-1,"data":"{payloads:...}"} — EncryptedPayload-обёртка, как пишет
-     *     MessageManager.saveOutgoingMessage (единый формат с медиа в группах).
+     * Парсинг контейнера {payloads:[...]} (личка: entries {deviceId,type,data}).
+     * Понимает обе формы хранения: напрямую, либо в EncryptedPayload-обёртке
+     * {type:-1, data:"{payloads:...}"}.
      */
-    private fun parseGroupPayloads(raw: String?): List<GroupPayload>? {
+    private fun parseDevicePayloads(raw: String?): List<DevicePayload>? =
+        parseEntries(raw)?.filter { !it.first.has("userId") }?.map {
+            val e = it.first
+            DevicePayload(e.get("deviceId").asInt, e.get("type").asInt, e.get("data").asString)
+        }?.takeIf { it.isNotEmpty() }
+
+    /** То же для группы: entries {userId, deviceId, type, data} */
+    private fun parseGroupDevicePayloads(raw: String?): List<GroupDevicePayload>? =
+        parseEntries(raw)?.filter { it.first.has("userId") }?.map {
+            val e = it.first
+            GroupDevicePayload(e.get("userId").asString, e.get("deviceId").asInt, e.get("type").asInt, e.get("data").asString)
+        }?.takeIf { it.isNotEmpty() }
+
+    /** Возвращает pairs (entryJson, isGroup) или null, если не контейнер */
+    private fun parseEntries(raw: String?): List<Pair<com.google.gson.JsonObject, Boolean>>? {
         if (raw.isNullOrEmpty()) return null
         return try {
             val obj = com.google.gson.JsonParser.parseString(raw).asJsonObject
@@ -656,10 +685,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 else -> return null
             }
             if (!target.has("payloads")) return null
-            target.getAsJsonArray("payloads").map {
-                val e = it.asJsonObject
-                GroupPayload(e.get("userId").asString, e.get("type").asInt, e.get("data").asString)
-            }
+            target.getAsJsonArray("payloads").map { Pair(it.asJsonObject, it.asJsonObject.has("userId")) }
         } catch (e: Exception) {
             null
         }

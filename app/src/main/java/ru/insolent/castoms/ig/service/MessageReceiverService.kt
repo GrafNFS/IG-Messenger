@@ -16,7 +16,6 @@ import ru.insolent.castoms.ig.ChatActivity
 import ru.insolent.castoms.ig.R
 import ru.insolent.castoms.ig.crypto.EncryptedPayload
 import ru.insolent.castoms.ig.crypto.MessageCryptoManager
-import ru.insolent.castoms.ig.database.ContactEntity
 import ru.insolent.castoms.ig.database.MessageStatus
 import ru.insolent.castoms.ig.network.NetworkClient
 import ru.insolent.castoms.ig.network.SocketManager
@@ -70,19 +69,14 @@ class MessageReceiverService : Service() {
             syncAllChats()
         }
 
-        // ✅ 1. Слушаем входящие сообщения
-        SocketManager.onMessageReceived = { from, payload, messageId, timestamp ->
-            serviceScope.launch { handleIncomingMessage(from, payload, messageId, timestamp) }
+        // ✅ 1. Слушаем входящие сообщения (entry уже выбран сервером под это устройство)
+        SocketManager.onMessageReceived = { from, fromDeviceId, payload, messageId, timestamp ->
+            serviceScope.launch { handleIncomingMessage(from, fromDeviceId, payload, messageId, timestamp) }
         }
 
         // 🌟 Групповые сообщения
-        SocketManager.onGroupMessage = { groupId, from, payload, messageId, timestamp ->
-            serviceScope.launch { handleGroupMessage(groupId, from, payload, messageId, timestamp) }
-        }
-
-        // 🌟 Системные сообщения групп
-        SocketManager.onSystemMessage = { groupId, messageId, text, timestamp ->
-            serviceScope.launch { handleSystemMessage(groupId, messageId, text, timestamp) }
+        SocketManager.onGroupMessage = { groupId, from, fromDeviceId, payload, messageId, timestamp ->
+            serviceScope.launch { handleGroupMessage(groupId, from, fromDeviceId, payload, messageId, timestamp) }
         }
 
         // ✅ 2. Слушаем доставку
@@ -106,10 +100,10 @@ class MessageReceiverService : Service() {
         }
 
         // ✅ 4. Слушаем действия (редактирование/удаление)
-        SocketManager.onMessageAction = { from, payload, targetMessageId ->
+        SocketManager.onMessageAction = { from, fromDeviceId, payload, targetMessageId ->
             serviceScope.launch {
                 try {
-                    val actionContent = cryptoManager.decryptMessage(payload, from)
+                    val actionContent = cryptoManager.decryptMessage(payload, from, fromDeviceId)
                     if (targetMessageId != null && actionContent.action != null) {
                         when (actionContent.action) {
                             "edit" -> messageManager.updateMessageText(targetMessageId, actionContent.text)
@@ -193,9 +187,9 @@ class MessageReceiverService : Service() {
         showNewMessageNotification(messageId, contact, notificationText, from)
     }
 
-    private suspend fun handleIncomingMessage(from: String, payload: EncryptedPayload, messageId: String, timestamp: Long) {
+    private suspend fun handleIncomingMessage(from: String, fromDeviceId: Int, payload: EncryptedPayload, messageId: String, timestamp: Long) {
         try {
-            val messageContent = cryptoManager.decryptMessage(payload, from)
+            val messageContent = cryptoManager.decryptMessage(payload, from, fromDeviceId)
             val attachments = messageContent.attachments
 
             val messageType = when {
@@ -275,27 +269,10 @@ class MessageReceiverService : Service() {
         return c?.displayName ?: c?.username
     }
 
-    /** Системное сообщение («X добавил Y») — сохраняем как есть, без дешифровки */
-    private suspend fun handleSystemMessage(groupId: String, messageId: String, text: String, timestamp: Long) {
-        try {
-            try {
-                messageManager.saveIncomingMessage(
-                    chatId = groupId, senderId = "system", content = text,
-                    timestamp = timestamp, messageId = messageId,
-                    messageType = "system", attachments = null
-                )
-            } catch (e: Exception) {
-                Log.d(TAG, "Duplicate system message, skip: $messageId")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to save system message", e)
-        }
-    }
-
-    private suspend fun handleGroupMessage(groupId: String, from: String, payload: EncryptedPayload, messageId: String, timestamp: Long) {
+    private suspend fun handleGroupMessage(groupId: String, from: String, fromDeviceId: Int, payload: EncryptedPayload, messageId: String, timestamp: Long) {
         try {
             // Дешифруем entry отправителя (ленивая init сессии — как в догоне)
-            val messageContent = MessageSyncer.decryptWithLazyInit(cryptoManager, payload, from)
+            val messageContent = MessageSyncer.decryptWithLazyInit(cryptoManager, payload, from, fromDeviceId)
             val attachments = messageContent.attachments
 
             val messageType = when {
@@ -348,7 +325,7 @@ class MessageReceiverService : Service() {
             // Уведомление: имя группы + отправитель
             if (ChatActivity.currentOpenChatId != groupId) {
                 val sender = messageManager.getContactById(from)
-                val senderName = (sender as? ru.insolent.castoms.ig.database.ContactEntity)?.displayName ?: "Собеседник"
+                val senderName = (sender as? ru.insolent.castoms.ig.database.ContactEntity)?.displayName ?: "Участник"
                 val text = when {
                     messageContent.text.isNotEmpty() -> "$senderName: ${messageContent.text}"
                     messageType == "audio" -> "$senderName: 🎙️ Голосовое сообщение"
@@ -367,7 +344,7 @@ class MessageReceiverService : Service() {
         }
     }
 
-    private fun showNewMessageNotification(messageId: String, contact: ContactEntity?, messageText: String, senderId: String) {
+    private fun showNewMessageNotification(messageId: String, contact: Any?, messageText: String, senderId: String) {
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -377,11 +354,8 @@ class MessageReceiverService : Service() {
 
         val intent = Intent(this, ChatActivity::class.java).apply {
             putExtra("EXTRA_CONTACT_ID", senderId)
-            putExtra("EXTRA_CONTACT_NAME", contact?.displayName ?: contact?.username ?: "Собеседник")
-            putExtra("EXTRA_IS_GROUP", contact?.isGroup ?: false)
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
-
         val pendingIntent = PendingIntent.getActivity(
             this, messageId.hashCode(), intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -414,6 +388,5 @@ class MessageReceiverService : Service() {
         SocketManager.onMessageAction = null
         SocketManager.onConnected = null
         SocketManager.onGroupMessage = null
-        SocketManager.onSystemMessage = null
     }
 }

@@ -72,6 +72,15 @@ class SessionManager(context: Context) {
         return deviceId
     }
 
+    fun getCryptoDeviceId(): Int {
+        var id = prefs.getInt("crypto_device_id", -1)
+        if (id == -1) {
+            id = java.util.Random().nextInt(16380) + 1
+            prefs.edit().putInt("crypto_device_id", id).apply()
+        }
+        return id
+    }
+
     fun clearAll() {
         prefs.edit().clear().apply()
     }

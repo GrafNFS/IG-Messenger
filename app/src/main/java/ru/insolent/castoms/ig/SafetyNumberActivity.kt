@@ -50,9 +50,12 @@ class SafetyNumberActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 val myId = SessionManager(this@SafetyNumberActivity).getUserId() ?: return@launch
-                val myIdentity = SecureKeyStore(this@SafetyNumberActivity)
-                    .getString("${myId}_identity_public", null)
-                if (myIdentity == null) { binding.tvSafetyNumber.text = "Ключи устройства не найдены"; return@launch }
+                val deviceId = SessionManager(this@SafetyNumberActivity).getCryptoDeviceId()
+                val secureStore = SecureKeyStore(this@SafetyNumberActivity)
+                val myIdentityB64 = secureStore.getString("${myId}_${deviceId}_identity_public", null)
+                    ?: secureStore.getString("${myId}_identity_public", null)   // легаси
+
+                if (myIdentityB64 == null) { binding.tvSafetyNumber.text = "Ключи устройства не найдены"; return@launch }
 
                 val resp = NetworkClient.apiService.getIdentityKey(contactId)
                 val theirIdentity = if (resp.isSuccessful) resp.body()?.identityKey else null
@@ -60,7 +63,7 @@ class SafetyNumberActivity : AppCompatActivity() {
                     binding.tvSafetyNumber.text = "Собеседник ещё не загрузил ключи"; return@launch
                 }
 
-                val number = SafetyNumberHelper.compute(myIdentity, theirIdentity)
+                val number = SafetyNumberHelper.compute(myIdentityB64, theirIdentity)
                 binding.tvSafetyNumber.text = SafetyNumberHelper.format(number)
                 binding.tvHint.visibility = View.VISIBLE
             } catch (e: Exception) {

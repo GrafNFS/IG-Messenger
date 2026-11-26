@@ -61,40 +61,32 @@ object MessageSyncer {
                 //    иначе сессия бросает DuplicateMessageException (old counter)
                 if (messageManager.getMessageById(messageId) != null) continue
 
-                // 🌟 Системное сообщение: { system: true, text } — не шифруется
-                val payloadObj0 = try {
-                    com.google.gson.JsonParser.parseString(Gson().toJson(dto.payload)).asJsonObject
-                } catch (e: Exception) { null }
-
-                if (payloadObj0 != null && payloadObj0.has("system")) {
-                    val sysText = payloadObj0.get("text").asString
-                    try {
-                        messageManager.saveIncomingMessage(
-                            chatId = chatId, senderId = dto.senderId, content = sysText,
-                            timestamp = dto.timestamp, messageId = messageId,
-                            messageType = "system", attachments = null
-                        )
-                        newCount++
-                    } catch (e: Exception) { /* дубликат */ }
-                    continue
-                }
-
                 try {
                     val payloadJson = Gson().toJson(dto.payload)
 
-                    // 🌟 Групповое сообщение: payload = { payloads: [{userId,type,data}...] }
-                    //    Сервер хранит контейнер целиком — выбираем СВОЙ entry.
+                    // 🌟 Мульти-девайс контейнер: { fromDeviceId, payloads: [...] }.
+                    //    Группа: entries {userId, deviceId}; личка: entries {deviceId}.
                     var isGroupMsg = false
+                    val myDeviceId = cryptoManager.localDeviceId
                     val payload: EncryptedPayload? = run {
                         val obj = com.google.gson.JsonParser.parseString(payloadJson).asJsonObject
                         if (obj.has("payloads")) {
-                            isGroupMsg = true
                             val arr = obj.getAsJsonArray("payloads")
-                            val entry = arr.firstOrNull {
-                                it.asJsonObject.get("userId")?.asString == myId
-                            }?.asJsonObject
+                            if (arr.size() > 0 && arr.get(0).asJsonObject.has("userId")) {
+                                isGroupMsg = true
+                            }
+                            val entry = if (isGroupMsg) {
+                                arr.firstOrNull {
+                                    val e = it.asJsonObject
+                                    e.get("userId")?.asString == myId && e.get("deviceId")?.asInt == myDeviceId
+                                }?.asJsonObject
+                            } else {
+                                arr.firstOrNull {
+                                    it.asJsonObject.get("deviceId")?.asInt == myDeviceId
+                                }?.asJsonObject
+                            }
                             if (entry == null) {
-                                // Не наш entry (мы — отправитель, либо не адресат) — пропуск
+                                // Не наш entry (мы — отправитель/не адресат) — пропуск
                                 null
                             } else {
                                 EncryptedPayload(entry.get("type").asInt, entry.get("data").asString)
@@ -104,8 +96,9 @@ object MessageSyncer {
                         }
                     } ?: continue
 
-                    // senderId в группе = отправитель; сессия с ним строится как обычно
-                    val messageContent = decryptWithLazyInit(cryptoManager, payload!!, senderId)
+                    // Дешифруем сессией с (отправитель, ЕГО устройство)
+                    val fromDeviceId = payloadObj0?.get("fromDeviceId")?.asString?.toIntOrNull() ?: 1
+                    val messageContent = decryptWithLazyInit(cryptoManager, payload, senderId, fromDeviceId)
 
                     val attachments = messageContent.attachments
                     val messageType = when {
@@ -203,22 +196,24 @@ object MessageSyncer {
     suspend fun decryptWithLazyInit(
         cryptoManager: MessageCryptoManager,
         payload: EncryptedPayload,
-        senderId: String
+        senderId: String,
+        senderDeviceId: Int
     ): MessageContent {
         return try {
-            cryptoManager.decryptMessage(payload, senderId)
+            cryptoManager.decryptMessage(payload, senderId, senderDeviceId)
         } catch (e: Exception) {
             val needInit = e is org.signal.libsignal.protocol.NoSessionException ||
                     (e is IllegalStateException && e.message?.contains("Session not ready") == true)
             if (!needInit) throw e
 
-            Log.d(TAG, "No session with $senderId — lazy init from key bundle")
+            Log.d(TAG, "No session with $senderId:$senderDeviceId — lazy init from key bundle")
             val bundleResp = NetworkClient.apiService.getKeysBundle(senderId)
             val bundle = bundleResp.body()
             if (!bundleResp.isSuccessful || bundle == null) throw e
 
+            // Инициализируем сессии со ВСЕМИ устройствами отправителя
             cryptoManager.initializeSession(senderId, bundle)
-            cryptoManager.decryptMessage(payload, senderId)
+            cryptoManager.decryptMessage(payload, senderId, senderDeviceId)
         }
     }
 }

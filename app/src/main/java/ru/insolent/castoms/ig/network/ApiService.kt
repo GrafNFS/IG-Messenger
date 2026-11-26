@@ -26,7 +26,7 @@ interface ApiService {
     suspend fun getIdentityKey(@Path("userId") userId: String): Response<IdentityKeyResponse>
 
     @GET("api/keys/{userId}")
-    suspend fun getKeysBundle(@Path("userId") userId: String): Response<KeysBundle>
+    suspend fun getKeysBundle(@Path("userId") userId: String): Response<DevicesBundleResponse>
 
     @GET("api/users/search")
     suspend fun searchUsers(
@@ -79,7 +79,10 @@ interface ApiService {
 
     @Headers("Accept-Encoding: identity")
     @GET("api/apk/{version}")
-    suspend fun downloadApk(@Path("version") version: String): Response<okhttp3.ResponseBody>
+    suspend fun downloadApk(
+        @Path("version") version: String,
+        @Header("Range") range: String? = null
+    ): Response<ResponseBody>
 
     @DELETE("api/media/{fileId}")
     suspend fun deleteMedia(@Path("fileId") fileId: String): Response<okhttp3.ResponseBody>
@@ -212,6 +215,7 @@ data class UserData(
 )
 
 data class KeysUploadRequest(
+    val deviceId: String,
     val userId: String,
     val identityKey: String,
     val signedPreKeyId: Int,
@@ -285,14 +289,6 @@ data class AddContactResponse(
 )
 
 @Keep
-data class OneTimeKey(
-    @SerializedName("keyId")
-    val keyId: Int,
-    @SerializedName("publicKey")
-    val publicKey: String
-)
-
-@Keep
 data class KeysUploadResponse(
     @SerializedName("success")
     val success: Boolean,
@@ -302,21 +298,7 @@ data class KeysUploadResponse(
     val remaining: Int? = null
 )
 
-@Keep
-data class KeysBundle(
-    @SerializedName("identityKey")
-    val identityKey: String,
-    @SerializedName("signedPreKeyId")
-    val signedPreKeyId: Int,
-    @SerializedName("signedPreKeyPublic")
-    val signedPreKeyPublic: String,
-    @SerializedName("signedPreKeySig")
-    val signedPreKeySig: String,
-    @SerializedName("oneTimeKeys")
-    val oneTimeKeys: List<OneTimeKey>,
-    @SerializedName("registrationId")
-    val registrationId: Int  // ✅ Добавь это поле!
-)
+
 
 @Keep
 data class UserStatusDTO(
@@ -375,17 +357,6 @@ data class GroupMemberDto(
     val avatarUrl: String? = null
 )
 
-/** Entry зашифрованного сообщения для конкретного участника группы */
-@Keep
-data class GroupPayload(
-    @SerializedName("userId")
-    val userId: String,
-    @SerializedName("type")
-    val type: Int,
-    @SerializedName("data")
-    val data: String
-)
-
 @Keep
 data class RemainingKeysResponse(
     @SerializedName("remaining")
@@ -395,5 +366,22 @@ data class RemainingKeysResponse(
 @Keep
 data class OneTimeKeysUploadRequest(
     @SerializedName("oneTimeKeys")
+    val deviceId: String,
     val oneTimeKeys: List<OneTimeKey>
 )
+
+data class OneTimeKey(val keyId: Int, val publicKey: String)
+
+data class DeviceKeysBundle(
+    val deviceId: String,
+    val identityKey: String,
+    val signedPreKeyId: Int,
+    val signedPreKeyPublic: String,
+    val signedPreKeySig: String,
+    val registrationId: Int,
+    val oneTimeKeys: List<OneTimeKey> = emptyList()
+)
+data class DevicesBundleResponse(val devices: List<DeviceKeysBundle>)
+
+data class DevicePayload(val deviceId: Int, val type: Int, val data: String)
+data class GroupDevicePayload(val userId: String, val deviceId: Int, val type: Int, val data: String)

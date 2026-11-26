@@ -25,7 +25,7 @@ object SocketManager {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     // Слушатель для входящих сообщений
-    var onMessageReceived: ((from: String, payload: EncryptedPayload, messageId: String, timestamp: Long) -> Unit)? = null
+    var onMessageReceived: ((from: String, fromDeviceId: Int, payload: EncryptedPayload, messageId: String, timestamp: Long) -> Unit)? = null
 
     // Слушатель для подтверждения прочтения (две галочки)
     var onMessageRead: ((messageId: String, readBy: String) -> Unit)? = null
@@ -33,7 +33,7 @@ object SocketManager {
     var onUserStatusChanged: ((userId: String, isOnline: Boolean) -> Unit)? = null
     var onTypingIndicator: ((userId: String, chatId: String, isTyping: Boolean) -> Unit)? = null
     // Слушатель действий (редактирование/удаление)
-    var onMessageAction: ((from: String, payload: EncryptedPayload, targetMessageId: String?) -> Unit)? = null
+    var onMessageAction: ((from: String, fromDeviceId: Int, payload: EncryptedPayload, targetMessageId: String?) -> Unit)? = null
 
     // Слушатель для оффлайн-доставки
     var onOfflineMessageReceived: ((count: Int) -> Unit)? = null
@@ -42,13 +42,10 @@ object SocketManager {
     var onConnected: (() -> Unit)? = null
 
     // 🌟 Групповые сообщения: сервер присылает ЕГО entry (уже выбран по userId)
-    var onGroupMessage: ((groupId: String, from: String, payload: EncryptedPayload, messageId: String, timestamp: Long) -> Unit)? = null
+    var onGroupMessage: ((groupId: String, from: String, fromDeviceId: Int, payload: EncryptedPayload, messageId: String, timestamp: Long) -> Unit)? = null
 
     // 🌟 Тайпинг в группах
     var onGroupTyping: ((groupId: String, userId: String, isTyping: Boolean) -> Unit)? = null
-
-    // 🌟 Системные сообщения группы («X добавил Y») — не шифруются
-    var onSystemMessage: ((groupId: String, messageId: String, text: String, timestamp: Long) -> Unit)? = null
 
     /**
      * Инициализация контекстом приложения. Вызывать ОДИН РАЗ до connect().
@@ -77,8 +74,12 @@ object SocketManager {
                 transports = arrayOf("websocket")
                 reconnection = true
                 reconnectionAttempts = 10
-                // ✅ Аутентификация сокета — сервер проверяет JWT на этапе handshake
-                auth = mapOf("token" to token)
+                // ✅ Аутентификация сокета — сервер проверяет JWT на этапе handshake;
+                //    deviceId — мульти-девайс маршрутизация (сервер отдаёт entry устройства)
+                auth = mapOf(
+                    "token" to token,
+                    "deviceId" to SessionManager(appContext).getCryptoDeviceId().toString()
+                )
             }
 
             socket = IO.socket(SERVER_URL, options)
@@ -111,20 +112,21 @@ object SocketManager {
             socket?.on("private_message") { args ->
                 val data = args[0] as JSONObject
                 val from = data.getString("from")
+                val fromDeviceId = data.optString("fromDeviceId", "1").toInt()
                 val payloadJson = data.getJSONObject("payload")
 
                 val messageId = data.optString("messageId", "")
                 val timestamp = data.optLong("timestamp", System.currentTimeMillis())
                 val isOffline = data.optBoolean("isOffline", false)
 
-                Log.d(TAG, "📨 Received from $from, msgId: $messageId, offline: $isOffline")
+                Log.d(TAG, "📨 Received from $from (dev $fromDeviceId), msgId: $messageId, offline: $isOffline")
 
                 val encrypted = EncryptedPayload(
                     type = payloadJson.getInt("type"),
                     data = payloadJson.getString("data")
                 )
 
-                onMessageReceived?.invoke(from, encrypted, messageId, timestamp)
+                onMessageReceived?.invoke(from, fromDeviceId, encrypted, messageId, timestamp)
             }
 
             // 🌟 Входящее групповое сообщение
@@ -132,6 +134,7 @@ object SocketManager {
                 val data = args[0] as JSONObject
                 val groupId = data.getString("groupId")
                 val from = data.getString("from")
+                val fromDeviceId = data.optString("fromDeviceId", "1").toInt()
                 val payloadJson = data.getJSONObject("payload")
                 val messageId = data.optString("messageId", "")
                 val timestamp = data.optLong("timestamp", System.currentTimeMillis())
@@ -140,18 +143,8 @@ object SocketManager {
                     type = payloadJson.getInt("type"),
                     data = payloadJson.getString("data")
                 )
-                Log.d(TAG, "👥 Group message in $groupId from $from, msgId: $messageId")
-                onGroupMessage?.invoke(groupId, from, encrypted, messageId, timestamp)
-            }
-
-            socket?.on("system_message") { args ->
-                val data = args[0] as JSONObject
-                onSystemMessage?.invoke(
-                    data.getString("groupId"),
-                    data.optString("messageId", ""),
-                    data.getString("text"),
-                    data.optLong("timestamp", System.currentTimeMillis())
-                )
+                Log.d(TAG, "👥 Group message in $groupId from $from (dev $fromDeviceId), msgId: $messageId")
+                onGroupMessage?.invoke(groupId, from, fromDeviceId, encrypted, messageId, timestamp)
             }
 
             socket?.on("group_typing") { args ->
@@ -210,6 +203,7 @@ object SocketManager {
             socket?.on("message_action") { args ->
                 val json = JSONObject(args[0].toString())
                 val from = json.getString("from")
+                val fromDeviceId = json.optString("fromDeviceId", "1").toInt()
                 val payloadJson = json.getJSONObject("payload")
                 val targetId = json.optString("messageId", null)
 
@@ -218,8 +212,8 @@ object SocketManager {
                     data = payloadJson.getString("data")
                 )
 
-                Log.d(TAG, "⚡ Received message_action from $from, target: $targetId")
-                onMessageAction?.invoke(from, payload, targetId)
+                Log.d(TAG, "⚡ Received message_action from $from (dev $fromDeviceId), target: $targetId")
+                onMessageAction?.invoke(from, fromDeviceId, payload, targetId)
             }
 
         } catch (e: URISyntaxException) {
@@ -239,45 +233,58 @@ object SocketManager {
         PreKeyRefillWorker.schedulePeriodic(appContext)
     }
 
-    fun sendMessageAction(chatId: String, payload: EncryptedPayload, targetMessageId: String?): Boolean {
+    /** Действия (edit/delete) — тоже per-device payloads */
+    fun sendMessageAction(chatId: String, payloads: List<ru.insolent.castoms.ig.network.DevicePayload>, targetMessageId: String?): Boolean {
         if (socket?.connected() != true) return false
+        val arr = org.json.JSONArray()
+        for (p in payloads) {
+            arr.put(JSONObject().apply {
+                put("deviceId", p.deviceId)
+                put("type", p.type)
+                put("data", p.data)
+            })
+        }
         val data = JSONObject().apply {
             put("chatId", chatId)
-            put("payload", JSONObject().apply {
-                put("type", payload.type)
-                put("data", payload.data)
-            })
+            put("payloads", arr)
             if (targetMessageId != null) put("messageId", targetMessageId)
         }
         socket?.emit("message_action", data)
         return true
     }
 
-    fun sendEncryptedMessage(targetUserId: String, payload: EncryptedPayload, messageId: String, typeMsg: String): Boolean {
+    /** Мульти-девайс: payloads — по entry на каждое устройство получателя */
+    fun sendEncryptedMessage(targetUserId: String, payloads: List<ru.insolent.castoms.ig.network.DevicePayload>, messageId: String, typeMsg: String): Boolean {
         if (socket?.connected() != true) return false
 
+        val arr = org.json.JSONArray()
+        for (p in payloads) {
+            arr.put(JSONObject().apply {
+                put("deviceId", p.deviceId)
+                put("type", p.type)
+                put("data", p.data)
+            })
+        }
         val data = JSONObject().apply {
             put("to", targetUserId)
             put("typeMsg", typeMsg)
             put("messageId", messageId)
-            put("payload", JSONObject().apply {
-                put("type", payload.type)
-                put("data", payload.data)
-            })
+            put("payloads", arr)
         }
         socket?.emit("private_message", data)
-        Log.d(TAG, "📤 Sent message $messageId to $targetUserId typeMsg $typeMsg")
+        Log.d(TAG, "📤 Sent message $messageId to $targetUserId (${payloads.size} devices)")
         return true
     }
 
-    /** Группа: payloads — зашифровано ОТДЕЛЬНО для каждого участника (pairwise) */
-    fun sendGroupMessage(groupId: String, payloads: List<ru.insolent.castoms.ig.network.GroupPayload>, messageId: String, typeMsg: String): Boolean {
+    /** Группа: entries — по каждому (участник × его устройство), pairwise */
+    fun sendGroupMessage(groupId: String, payloads: List<ru.insolent.castoms.ig.network.GroupDevicePayload>, messageId: String, typeMsg: String): Boolean {
         if (socket?.connected() != true) return false
 
         val arr = org.json.JSONArray()
         for (p in payloads) {
             arr.put(JSONObject().apply {
                 put("userId", p.userId)
+                put("deviceId", p.deviceId)
                 put("type", p.type)
                 put("data", p.data)
             })
