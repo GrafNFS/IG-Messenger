@@ -10,7 +10,7 @@ interface MessageDao {
     suspend fun insertMessages(messages: List<MessageEntity>)
 
     // ✅ Для одиночной вставки (при получении): REPLACE, чтобы обновлять статус
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertMessage(message: MessageEntity)
 
     // === Чтение ===
