@@ -24,6 +24,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import ru.insolent.castoms.ig.crypto.CryptoManager
 import ru.insolent.castoms.ig.model.AppCheckVersion
 import ru.insolent.castoms.ig.network.NetworkClient
 import ru.insolent.castoms.ig.network.SocketManager
@@ -206,6 +207,9 @@ class SplashActivity : AppCompatActivity() {
 
         // Подключаем сокет сразу
         SocketManager.connect(userId)
+        lifecycleScope.launch {
+            CryptoManager(this@SplashActivity).ensureKeysUploaded(userId)
+        }
 
         // Проверяем необходимость запроса разрешений (Android 13+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

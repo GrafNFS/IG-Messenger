@@ -74,8 +74,9 @@ class LoginActivity : AppCompatActivity() {
                         // Ключей нет (первый вход на устройстве / данные очищены)
                         val keysUploaded = cryptoManager.generateAndUploadKeys(authResponse.user.id)
                         if (!keysUploaded) {
-                            showError("Failed to setup encryption keys")
-                            return@launch
+                            lifecycleScope.launch {
+                                CryptoManager(this@LoginActivity).ensureKeysUploaded(authResponse.user.id)
+                            }
                         }
                     } else {
                         // Ключи есть -> можно опционально дослать недостающие One-Time PreKeys на сервер

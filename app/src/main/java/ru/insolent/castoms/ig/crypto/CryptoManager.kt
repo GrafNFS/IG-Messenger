@@ -105,7 +105,13 @@ class CryptoManager(private val context: Context) {
                 registrationId = registrationId
             )
 
-            NetworkClient.apiService.uploadKeys(request).isSuccessful
+            val response = NetworkClient.apiService.uploadKeys(request)
+            val ok = response.isSuccessful
+            if (ok) {
+                context.getSharedPreferences("crypto_prefs", Context.MODE_PRIVATE)
+                    .edit().putString("uploaded_device_id", deviceId.toString()).apply()
+            }
+            ok
         } catch (e: Exception) {
             Log.e(TAG, "generateAndUploadKeys failed", e)
             false
@@ -232,5 +238,56 @@ class CryptoManager(private val context: Context) {
         val keyPair = Curve.generateKeyPair()
         val identityKey = org.signal.libsignal.protocol.IdentityKey(keyPair.publicKey)
         return IdentityKeyPair(identityKey, keyPair.privateKey)
+    }
+
+    /**
+     * Гарантирует, что ключи ЭТОГО устройства залиты на сервер в новом формате.
+     * Вызывать при старте приложения после логина.
+     */
+    suspend fun ensureKeysUploaded(userId: String): Boolean = withContext(Dispatchers.IO) {
+        val prefs = context.getSharedPreferences("crypto_prefs", Context.MODE_PRIVATE)
+        val uploadedFor = prefs.getString("uploaded_device_id", null)
+        val p = prefix(userId)
+        val haveKeys = secureStore.getString("${p}identity_public", null) != null
+
+        if (uploadedFor == deviceId.toString() && haveKeys) return@withContext true
+
+        if (haveKeys) {
+            // Перезаливаем существующие ключи под id этого устройства
+            val identityPublic = secureStore.getString("${p}identity_public", null)!!
+            val signedB64 = secureStore.getString("${p}signed_prekey_record", null)
+            val registrationId = secureStore.getInt("${p}registration_id", -1)
+            if (signedB64 == null || registrationId == -1) return@withContext generateAndUploadKeys(userId)
+
+            val signed = SignedPreKeyRecord(Base64.decode(signedB64, Base64.NO_WRAP))
+            // Публичные части OTK восстанавливаем из хранимых приватных
+            val otkPublics = mutableListOf<OneTimeKey>()
+            val otkJson = secureStore.getString("${p}one_time_keys", "[]") ?: "[]"
+            try {
+                val arr = JSONArray(otkJson)
+                for (i in 0 until arr.length()) {
+                    val obj = arr.getJSONObject(i)
+                    val priv = Curve.decodePrivatePoint(Base64.decode(obj.getString("private"), Base64.NO_WRAP))
+                    otkPublics.add(OneTimeKey(obj.getInt("id"),
+                        Base64.encodeToString(priv.publicKey().serialize(), Base64.NO_WRAP)))
+                }
+            } catch (_: Exception) {}
+
+            val request = KeysUploadRequest(
+                deviceId = deviceId.toString(),
+                userId = userId,
+                identityKey = identityPublic,
+                signedPreKeyId = signed.id,
+                signedPreKeyPublic = Base64.encodeToString(signed.keyPair.publicKey.serialize(), Base64.NO_WRAP),
+                signedPreKeySig = Base64.encodeToString(signed.signature, Base64.NO_WRAP),
+                oneTimeKeys = otkPublics,
+                registrationId = registrationId
+            )
+            val ok = NetworkClient.apiService.uploadKeys(request).isSuccessful
+            if (ok) prefs.edit().putString("uploaded_device_id", deviceId.toString()).apply()
+            ok
+        } else {
+            generateAndUploadKeys(userId)
+        }
     }
 }
